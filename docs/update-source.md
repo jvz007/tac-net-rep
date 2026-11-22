@@ -121,6 +121,14 @@ The state stays `unknown` (`basis` null) when the head VERSION cannot be read (n
 
 `POST /api/tfd/system/updates/online/stage/` with no `source_type` uses the saved source (and its `ref`). An explicit `source_type` always wins. With no saved source, the default stays `release`.
 
+## Picking a version (1.18.43)
+
+`GET /api/tfd/system/updates/versions/?component=framework|ui` lists the builds on the saved source, newest first. On a branch source it reads the 100 newest commits and keeps those whose message is a plain version such as `1.18.42` (a `-N` rebuild label is skipped). On a release source it reads the published releases (drafts and prereleases skipped). Each row is `{version, commit, date, operation, installable, reason}`. A release row has `commit` null; Core resolves the tag when you stage it.
+
+`POST /api/tfd/system/updates/online/stage/` with `source_type: "version"`, `version` and optionally `commit` stages that exact build. The version must be a row of the list Core reads at that moment, or the stage is refused with 409 `stale_candidate`. The tree must carry a valid signed release file. Core never falls back to an unsigned or legacy tree here. The root helper still re-verifies it.
+
+A downgrade has three limits, for every package however it arrives (list, stable release or offline upload). It is refused when it is below the highest minimum an installed module needs (`requires.framework` or `requires.ui`), when a Core build lacks a migration this server already applied (restore the server backup instead), or when a Core build is outside the installed UI's `requires.tec-tac-framework` range (downgrade the UI first). Anything Core cannot read counts as a refusal.
+
 ## Python
 
 `tec_tac.runtime_settings.get_update_source(component)` returns `{type, ref}`. It never raises. A missing or invalid stored value reads as the default.

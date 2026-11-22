@@ -36,7 +36,7 @@ from .views import (
     ModuleRemoveView, RoleExtensionPermissionsView, TotpEnrollmentView, TotpQrView,
     SystemUpdateStatusView, SystemUpdatePackageInspectView, SystemUpdatePackageStageView,
     SystemUpdatePackageInstallView, SystemUpdateJobView, SystemUpdateOnlineStatusView,
-    SystemUpdateBranchesView, SystemUpdateOnlineStageView, SystemUpdateJobListView, SystemUpdateJobLogView, SystemUpdateTrustPolicyView, UiContextView,
+    SystemUpdateBranchesView, SystemUpdateVersionsView, SystemUpdateOnlineStageView, SystemUpdateJobListView, SystemUpdateJobLogView, SystemUpdateTrustPolicyView, UiContextView,
 )
 from .module_repository_views import (
     ModuleRepositoryListView, ModuleRepositoryDetailView, ModuleRepositorySyncView,
@@ -157,6 +157,7 @@ urlpatterns = [
     path("system/updates/jobs/<uuid:job_id>/log/", SystemUpdateJobLogView.as_view(), name="tec-tac-system-update-job-log"),
     path("system/updates/online/", SystemUpdateOnlineStatusView.as_view(), name="tec-tac-system-update-online-status"),
     path("system/updates/branches/", SystemUpdateBranchesView.as_view(), name="tec-tac-system-update-branches"),
+    path("system/updates/versions/", SystemUpdateVersionsView.as_view(), name="tec-tac-system-update-versions"),
     path("system/updates/online/stage/", SystemUpdateOnlineStageView.as_view(), name="tec-tac-system-update-online-stage"),
     path("auth/totp/enrollment/", TotpEnrollmentView.as_view(), name="tec-tac-totp-enrollment"),
     path("auth/totp/qr/", TotpQrView.as_view(), name="tec-tac-totp-qr"),

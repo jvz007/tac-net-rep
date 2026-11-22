@@ -47,6 +47,7 @@ from .system_update import (
     list_jobs as list_system_update_jobs,
     read_job_log as read_system_update_job_log,
     list_branches as system_update_branches,
+    list_versions as system_update_versions,
     online_status as system_update_online_status,
     queue_install as queue_system_update,
     stage_online_package,
@@ -944,6 +945,22 @@ class SystemUpdateBranchesView(APIView):
             return Response({"detail": str(exc)}, status=400)
 
 
+@extend_schema_view(get=extend_schema(tags=["Tec-Tac System Updates"], summary="List the builds on the saved update source that can be staged by version"))
+class SystemUpdateVersionsView(APIView):
+    permission_classes = [SessionAuthenticated]
+
+    def get(self, request):
+        _require_module_manager(request.user)
+        component = str(request.query_params.get("component", "")).strip()
+        try:
+            # The source is the server's saved one, never a client value.
+            return Response(system_update_versions(component, get_update_source(component)))
+        except GithubRateLimitError as exc:
+            return _github_rate_limit_response(exc)
+        except SystemUpdateError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac System Updates"], summary="Download, inspect, and stage an online release or branch system update"))
 class SystemUpdateOnlineStageView(APIView):
     permission_classes = [SessionAuthenticated]
@@ -963,8 +980,14 @@ class SystemUpdateOnlineStageView(APIView):
         commit = request.data.get("commit")
         if commit is not None and not isinstance(commit, str):
             return Response({"detail": "commit must be a 40-character hexadecimal SHA."}, status=400)
+        version = request.data.get("version")
+        if version is not None and not isinstance(version, str):
+            return Response({"detail": "version must be a string."}, status=400)
         try:
-            return Response(stage_online_package(component, source_type, str(ref).strip() if ref is not None else None, commit=commit), status=201)
+            return Response(stage_online_package(
+                component, source_type, str(ref).strip() if ref is not None else None, commit=commit,
+                version=version, source=get_update_source(component),
+            ), status=201)
         except StaleCandidateError as exc:
             return Response({"code": exc.code, "detail": str(exc)}, status=409)
         except GithubRateLimitError as exc:

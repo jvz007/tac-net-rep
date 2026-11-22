@@ -455,9 +455,24 @@ def _rate_limit_blocked_until() -> str | None:
     return None
 
 
+def _reduced_commit(item: dict) -> dict:
+    inner = item.get("commit") if isinstance(item.get("commit"), dict) else {}
+    committer = inner.get("committer") if isinstance(inner.get("committer"), dict) else {}
+    message = str(inner.get("message") or "").strip().splitlines()
+    return {"sha": item.get("sha"), "commit": {"message": message[0][:200] if message else "", "committer": {"date": committer.get("date")}}}
+
+
 def _reduce_body(url: str, body: object) -> object:
     """Keep only the fields Tec-Tac reads, so the saved ETag copy stays small."""
     path = urllib.parse.urlsplit(url).path
+    if isinstance(body, list):
+        # 1.18.43: the version lists hold up to 100 rows; keep only what the picker reads.
+        if path.endswith("/commits"):
+            return [_reduced_commit(item) for item in body if isinstance(item, dict)]
+        if path.endswith("/releases"):
+            keep = ("tag_name", "name", "published_at", "html_url", "draft", "prerelease")
+            return [{k: item.get(k) for k in keep} for item in body if isinstance(item, dict)]
+        return body
     if not isinstance(body, dict):
         return body
     if path.endswith("/releases/latest"):
@@ -792,6 +807,151 @@ def _installed_version(component: str) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------- downgrade limits (1.18.43, AD-77)
+_FLOOR_PART = re.compile(r"(>=|>)\s*(\S+)")
+_COMPONENT_LABEL = {"framework": "Tec-Tac Framework", "ui": "Tec-Tac UI"}
+
+
+def _satisfies_all(version: str | None, constraint: str | None) -> bool:
+    """A comma range such as ``>=1.18.35,<2.0.0``: every part must hold (``_satisfies`` takes one operator)."""
+    parts = [part.strip() for part in str(constraint or "").split(",") if part.strip()]
+    return all(_satisfies(version, part) for part in parts)
+
+
+def _extensions_root() -> Path:
+    try:
+        # lazy: registry needs Django, the rest of this module does not
+        from . import registry
+    except ImportError as exc:
+        raise SystemUpdateError("The installed modules could not be listed, so a downgrade is refused.") from exc
+    return Path(registry.EXTENSIONS_ROOT)
+
+
+def _applied_core_migrations() -> set[str]:
+    """Names of the tec_tac migrations this server already applied. Raises SystemUpdateError when they cannot be read."""
+    try:
+        # lazy: Django is not needed by the rest of this module
+        from django.core.exceptions import ImproperlyConfigured
+        from django.db import Error as DatabaseError
+        from django.db import connection
+        from django.db.migrations.recorder import MigrationRecorder
+
+        return {name for app, name in MigrationRecorder(connection).applied_migrations() if app == "tec_tac"}
+    except (ImportError, ImproperlyConfigured, DatabaseError) as exc:
+        raise SystemUpdateError("The migrations applied on this server could not be read.") from exc
+
+
+def _module_floors(component: str) -> list[tuple[str, str, str]]:
+    """(module id, operator, version) for every ``>=`` or ``>`` floor an installed module sets on this component.
+
+    Raises SystemUpdateError with a plain sentence when the modules or a manifest cannot be read (the caller refuses)."""
+    key = "framework" if component == "framework" else "ui"
+    root = _extensions_root()
+    floors: list[tuple[str, str, str]] = []
+    if not root.is_dir():
+        return floors
+    try:
+        folders = sorted(root.iterdir())
+    except OSError as exc:
+        raise SystemUpdateError("The installed modules could not be listed, so a downgrade is refused.") from exc
+    for folder in folders:
+        manifest = folder / "tec_tac.json"
+        if not folder.is_dir() or not manifest.is_file():
+            continue
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            requires = payload.get("requires") if isinstance(payload, dict) else None
+            spec = requires.get(key) if isinstance(requires, dict) else None
+            if spec is not None and not isinstance(spec, str):
+                raise ValueError("requirement is not text")
+        except (OSError, UnicodeDecodeError, ValueError, AttributeError) as exc:
+            raise SystemUpdateError(f"The requirements of module {folder.name} could not be read.") from exc
+        for part in str(spec or "").split(","):
+            match = _FLOOR_PART.fullmatch(part.strip())
+            if match:
+                floors.append((folder.name, match.group(1), match.group(2)))
+    return floors
+
+
+def _installed_ui_requirement() -> tuple[str | None, str | None]:
+    """(the installed UI's ``requires.tec-tac-framework`` range, a problem sentence): at most one is set."""
+    path = _component_root("ui") / "tec_tac_package.json"
+    if not path.is_file():
+        return None, None  # no UI installed from source: nothing to protect
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        requires = payload.get("requires") if isinstance(payload, dict) else None
+        spec = requires.get("tec-tac-framework") if isinstance(requires, dict) else None
+        if spec is not None and not isinstance(spec, str):
+            raise ValueError("requirement is not text")
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
+        return None, "The requirements of the installed UI could not be read."
+    return (spec.strip() or None) if isinstance(spec, str) else None, None
+
+
+def _limit_context(component: str) -> dict:
+    """What the downgrade limits read from disk, read once so a list of rows costs one scan, not one per row."""
+    ctx: dict = {"floors": [], "floors_problem": None, "ui_spec": None, "ui_problem": None}
+    try:
+        ctx["floors"] = _module_floors(component)
+    except SystemUpdateError as exc:
+        ctx["floors_problem"] = str(exc)
+    if component == "framework":
+        ctx["ui_spec"], ctx["ui_problem"] = _installed_ui_requirement()
+    return ctx
+
+
+def _migration_problem(package_migrations: set[str] | None) -> str | None:
+    if package_migrations is None:
+        return None
+    try:
+        applied = set(_applied_core_migrations())
+    except SystemUpdateError:  # fail closed: an unreadable record is a refusal, never a pass
+        return "The migrations applied on this server could not be read, so a downgrade is refused."
+    missing = sorted(applied - set(package_migrations))
+    if not missing:
+        return None
+    return (f"This Core version lacks migration {missing[0]} that this server already applied. "
+            "A downgrade never crosses a migration; restore the server backup instead.")
+
+
+def _limit_problem(component: str, version: str, ctx: dict, package_migrations: set[str] | None = None) -> str | None:
+    if ctx["floors_problem"]:
+        return ctx["floors_problem"]
+    unmet = [f for f in ctx["floors"] if not _satisfies(version, f"{f[1]}{f[2]}")]
+    if unmet:
+        module, operator, floor = max(unmet, key=lambda f: (_version_key(f[2]), f[1] == ">"))
+        others = len({f[0] for f in unmet} - {module})
+        who = f"Module {module}" + (f" and {others} more" if others else "")
+        label = _COMPONENT_LABEL[component]
+        return f"{who} needs {label} {floor} or newer." if operator == ">=" else f"{who} needs {label} newer than {floor}."
+    if component != "framework":
+        return None
+    problem = _migration_problem(package_migrations)
+    if problem:
+        return problem
+    if ctx["ui_problem"]:
+        return ctx["ui_problem"]
+    spec = ctx["ui_spec"]
+    if spec and not _satisfies_all(version, spec):
+        ui_version = _installed_version("ui")
+        return f"The installed UI {ui_version + ' ' if ui_version else ''}needs Tec-Tac Framework {spec}. Downgrade the UI first."
+    return None
+
+
+def downgrade_problem(component: str, version: str, *, package_migrations: set[str] | None = None) -> str | None:
+    """Why a downgrade to ``version`` is not allowed (AD-77), as a plain sentence, or None.
+
+    Only a downgrade is limited; an update or reinstall returns None. Limits: (1) below the highest minimum an
+    installed module requires, (2) Core only, a package that lacks a migration this server applied (needs
+    ``package_migrations``: the names in the package), (3) Core only, below the installed UI's requirement.
+    Anything that cannot be read refuses the downgrade.
+    """
+    if component not in COMPONENTS or _operation(_installed_version(component), version) != "downgrade":
+        return None
+    return _limit_problem(component, version, _limit_context(component), package_migrations)
+
+
 def inspect_archive(archive: Path, *, source: dict | None = None, release_manifest: Path | None = None, release_signature: Path | None = None) -> dict:
     if not archive.is_file():
         raise SystemUpdateError("Staged system update package was not found.")
@@ -802,6 +962,8 @@ def inspect_archive(archive: Path, *, source: dict | None = None, release_manife
         _extract_archive(archive, extracted)
         component, root = _find_package_root(extracted)
         version = _read_version(root)
+        migrations_dir = root / "framwork" / "tec_tac" / "migrations"
+        package_migrations = {p.stem for p in migrations_dir.glob("*.py") if p.stem != "__init__"} if migrations_dir.is_dir() else set()
         package_manifest = None
         manifest_path = root / "tec_tac_package.json"
         if manifest_path.is_file():
@@ -860,6 +1022,12 @@ def inspect_archive(archive: Path, *, source: dict | None = None, release_manife
             if not ok:
                 installable = False
                 block_reason = f"Requires Tec-Tac Framework {fw_constraint}; installed {fw_version or 'none'}."
+    if installable and operation == "downgrade":
+        # 1.18.43 (AD-77): the three downgrade limits apply to every downgrade, whichever way the older package arrived.
+        limit = downgrade_problem(component, version, package_migrations=package_migrations)
+        if limit:
+            installable = False
+            block_reason = limit
     return {
         "component": component,
         "component_label": component_label,
@@ -1638,6 +1806,243 @@ def list_branches(component: str) -> dict:
     return result
 
 
+# ---------------------------------------------------------------- version picker (1.18.43, AD-77)
+_PLAIN_VERSION = re.compile(r"\d+(?:\.\d+){1,2}")
+_MIGRATIONS_PATH = "framwork/tec_tac/migrations"
+
+
+def _version_source(component: str, source: object) -> tuple[str, str | None]:
+    """The saved update source as (type, ref). It comes from the server's setting, never from the client."""
+    if component not in COMPONENTS:
+        raise SystemUpdateError("component must be framework or ui")
+    row = source if isinstance(source, dict) else {}
+    kind = str(row.get("type") or "release").strip()
+    ref = str(row.get("ref")).strip() if row.get("ref") else None
+    if kind not in ("release", "branch"):
+        raise SystemUpdateError("The saved update source must be a release or a branch.")
+    if kind == "branch" and (not ref or len(ref) > 200):
+        raise SystemUpdateError("A branch name is required.")
+    return kind, ref
+
+
+def _github_list(url: str, *, allow_saved: bool) -> tuple[list, dict | None]:
+    """A cached list body (5 minutes, ETag-revalidated). ``allow_saved`` shows the saved list when GitHub limits or
+    cannot be reached (the list view); a stage never uses a saved answer."""
+    limited = None
+    try:
+        body = github_get_json(url, ttl=BRANCH_CACHE_TTL)
+    except GithubRateLimitError as exc:
+        entry = _etag_entry(url)
+        if not allow_saved or not entry or not isinstance(entry.get("body"), list):
+            raise
+        body, limited = entry["body"], exc.as_dict(cached_data_available=True)
+    except GithubUnreachableError as exc:
+        if not allow_saved:
+            raise
+        body = exc.saved_body
+    if not isinstance(body, list):
+        raise SystemUpdateError("GitHub returned an unexpected version list.")
+    return body, limited
+
+
+def _version_items(repo: str, kind: str, ref: str | None, *, allow_saved: bool) -> tuple[list[dict], dict | None]:
+    """Candidates newest first as {version, commit, date, ref}; one row per version (the newest wins)."""
+    items: dict[str, dict] = {}
+    if kind == "branch":
+        url = f"https://api.github.com/repos/{repo}/commits?sha={urllib.parse.quote(str(ref), safe='')}&per_page=100"
+        body, limited = _github_list(url, allow_saved=allow_saved)
+        for entry in body:
+            if not isinstance(entry, dict):
+                continue
+            inner = entry.get("commit") if isinstance(entry.get("commit"), dict) else {}
+            lines = str(inner.get("message") or "").strip().splitlines()
+            version = lines[0].strip() if lines else ""
+            sha = str(entry.get("sha") or "").lower()
+            if not _PLAIN_VERSION.fullmatch(version) or not _SHA40.fullmatch(sha):
+                continue  # a message such as 1.18.40-1 or a normal commit is not a version build
+            committer = inner.get("committer") if isinstance(inner.get("committer"), dict) else {}
+            items.setdefault(version, {"version": version, "commit": sha, "date": committer.get("date"), "ref": sha})
+    else:
+        body, limited = _github_list(f"https://api.github.com/repos/{repo}/releases?per_page=100", allow_saved=allow_saved)
+        for entry in body:
+            if not isinstance(entry, dict) or entry.get("draft") or entry.get("prerelease"):
+                continue
+            tag = str(entry.get("tag_name") or "").strip()
+            version = tag.lstrip("v")
+            if not tag or not _PLAIN_VERSION.fullmatch(version):
+                continue
+            items.setdefault(version, {"version": version, "commit": None, "date": entry.get("published_at"), "ref": tag})
+    return list(items.values()), limited
+
+
+def _version_rows(component: str, kind: str, items: list[dict], installed: str | None, ctx: dict) -> list[dict]:
+    """Rows newest first. The migration verdict is not part of this (it needs the package); see _mark_migration_limits."""
+    minimum = _signed_release_min_version(component) if kind == "release" else None
+    rows = []
+    for item in sorted(items, key=lambda i: _version_key(i["version"]), reverse=True):
+        version = item["version"]
+        operation = _operation(installed, version)
+        reason = None
+        if minimum and _version_key(version) < _version_key(minimum):
+            reason = f"Releases before {minimum} are not signed, and Core only installs signed builds by version."
+        elif operation == "downgrade":
+            reason = _limit_problem(component, version, ctx)
+        rows.append({
+            "version": version, "commit": item["commit"], "date": item["date"], "operation": operation,
+            "installable": reason is None, "reason": reason, "_ref": item["ref"],
+        })
+    return rows
+
+
+def _core_migration_names(repo: str, ref: str) -> set[str]:
+    """The migration names a Core build carries. Saved forever under repo:ref (a commit never changes). Raises SystemUpdateError."""
+    key = f"{repo}:{ref.lower()}"
+    try:
+        meta = (_read_release_cache().get("commit_metadata") or {}).get(key)
+    except OSError:
+        meta = None
+    if isinstance(meta, dict) and isinstance(meta.get("migrations"), list):
+        return {str(name) for name in meta["migrations"]}
+    url = f"https://api.github.com/repos/{repo}/contents/{_MIGRATIONS_PATH}?ref={urllib.parse.quote(ref, safe='')}"
+    try:
+        body = github_get_json(url, conditional=False)
+    except GithubRequestError as exc:
+        if exc.status != 404 or isinstance(exc, (GithubRateLimitError, GithubUnreachableError)):
+            raise
+        body = []  # the folder does not exist at that build: it has no migrations
+    if not isinstance(body, list):
+        raise SystemUpdateError("GitHub returned an unexpected migration listing.")
+    names = {
+        str(item.get("name"))[:-3] for item in body
+        if isinstance(item, dict) and item.get("type") == "file" and str(item.get("name") or "").endswith(".py") and item.get("name") != "__init__.py"
+    }
+
+    def mutate(doc: dict) -> None:
+        store = doc.setdefault("commit_metadata", {})
+        entry = store.get(key) if isinstance(store.get(key), dict) else {}
+        entry.update(migrations=sorted(names), checked_at=_utcnow())
+        store[key] = entry
+        if len(store) > MAX_COMMIT_METADATA:
+            for old in sorted(store, key=lambda k: str((store[k] or {}).get("checked_at") or ""))[: len(store) - MAX_COMMIT_METADATA]:
+                store.pop(old, None)
+
+    _cache_update(mutate)
+    return names
+
+
+def _mark_migration_limits(repo: str, rows: list[dict]) -> str:
+    """Limit 2 on the list rows without downloading anything (1.18.43).
+
+    A Core build's migrations only grow with its version, so among the older rows "lacks an applied migration" is true
+    from some row on. A binary search finds that boundary (about 7 probes for 100 rows). A probe that fails stops the
+    search: the rows keep no migration verdict and the answer is "unavailable". The stage-time check on the real
+    package is always the authority.
+    """
+    older = [r for r in rows if r["operation"] == "downgrade" and r["installable"]]
+    if not older:
+        return "done"
+    try:
+        applied = set(_applied_core_migrations())
+    except SystemUpdateError:  # fail closed
+        for row in older:
+            row.update(installable=False, reason="The migrations applied on this server could not be read, so a downgrade is refused.")
+        return "unavailable"
+    if not applied:
+        return "done"
+    missing_at: dict[int, list[str]] = {}
+    low, high = 0, len(older)
+    try:
+        while low < high:
+            mid = (low + high) // 2
+            missing = sorted(applied - _core_migration_names(repo, older[mid]["_ref"]))
+            if missing:
+                missing_at[mid] = missing
+                high = mid
+            else:
+                low = mid + 1
+    except SystemUpdateError:
+        return "unavailable"
+    for row in older[low:]:
+        row.update(
+            installable=False,
+            reason=(f"This Core version lacks migration {missing_at[low][0]} that this server already applied. "
+                    "A downgrade never crosses a migration; restore the server backup instead."),
+        )
+    return "done"
+
+
+def list_versions(component: str, source: dict | None = None) -> dict:
+    """Every signed-looking build on the server's saved source, newest first, each with what installing it would do (AD-77).
+
+    Branch source: the 100 newest commits whose message is a plain version. Release source: the published releases.
+    A row is listed from GitHub's metadata only; staging still verifies the signed tree of the real archive.
+    """
+    kind, ref = _version_source(component, source)
+    repo = _repo_name(component)
+    items, limited = _version_items(repo, kind, ref, allow_saved=True)
+    rows = _version_rows(component, kind, items, _installed_version(component), _limit_context(component))
+    check = _mark_migration_limits(repo, rows) if component == "framework" else "not_applicable"
+    for row in rows:
+        row.pop("_ref", None)
+    result = {
+        "component": component,
+        "repository": repo,
+        "source": {"type": kind, "ref": ref},
+        "installed_version": _installed_version(component),
+        "lowest_installable": next((r["version"] for r in reversed(rows) if r["installable"]), None),
+        "migration_check": check,
+        "versions": rows,
+    }
+    if limited is not None:
+        result["github_rate_limit_error"] = limited
+    return result
+
+
+_VERSION_SIGNED_ONLY = "Core only installs signed builds by version; this one has no valid signed release file."
+
+
+def _stage_version(component: str, repo: str, version: object, commit: str | None, source: object) -> dict:
+    """Stage exactly one listed build (AD-77). The version must be a row of the list read now; a commit that differs is stale."""
+    if not isinstance(version, str) or not version.strip():
+        raise SystemUpdateError("version is required.")
+    version = version.strip()
+    kind, ref = _version_source(component, source)
+    items, _ = _version_items(repo, kind, ref, allow_saved=False)
+    rows = _version_rows(component, kind, items, _installed_version(component), _limit_context(component))
+    row = next((r for r in rows if r["version"] == version), None)
+    if row is None:
+        raise StaleCandidateError(f"Version {version} is no longer on the list. Refresh the list and try again.")
+    pinned = str(commit).strip().lower() if commit is not None and str(commit).strip() else None
+    if pinned and not _SHA40.fullmatch(pinned):
+        raise SystemUpdateError("commit must be a 40-character hexadecimal SHA.")
+    if pinned and row["commit"] and pinned != row["commit"]:
+        raise StaleCandidateError(f"Version {version} now points to {row['commit'][:7]}; the list showed {pinned[:7]}. Refresh the list and try again.")
+    if not row["installable"]:
+        raise SystemUpdateError(row["reason"] or "This version cannot be installed on this server.")
+    sha = row["commit"]
+    if sha is None:  # a release row: resolve the tag to its commit now, as the latest-release path does
+        info = _github_json(f"https://api.github.com/repos/{repo}/commits/{urllib.parse.quote(row['_ref'], safe='')}")
+        sha = str(info.get("sha", "")).lower() if isinstance(info, dict) else ""
+        if not _SHA40.fullmatch(sha):
+            raise SystemUpdateError("Unable to resolve this release to an exact commit SHA.")
+        if pinned and pinned != sha:
+            raise StaleCandidateError(f"Version {version} now points to {sha[:7]}; the list showed {pinned[:7]}. Refresh the list and try again.")
+    stage_source = {"type": kind, "repository": repo, "ref": row["_ref"] if kind == "release" else ref, "commit": sha}
+    url = f"https://api.github.com/repos/{repo}/zipball/{urllib.parse.quote(sha, safe='')}"
+    staged = _download_to_stage(url, filename=f"{component}-version-{sha[:12]}.zip", source=stage_source, component=component)
+    preview = staged.get("preview") if isinstance(staged, dict) else None
+    trust = preview.get("release_trust") if isinstance(preview, dict) else None
+    verified = isinstance(trust, dict) and trust.get("signed") is True and trust.get("verified") is True and trust.get("legacy") is False
+    if not verified or preview.get("version") != version:
+        # Never the unsigned or legacy fallback, never the development unsigned override; the tree must be the build listed.
+        try:
+            discard_stage(str(staged.get("upload_id")))
+        except (SystemUpdateError, OSError, KeyError, ValueError):
+            pass
+        raise SystemUpdateError(_VERSION_SIGNED_ONLY if not verified else f"The build at {sha[:7]} is not version {version}.")
+    return staged
+
+
 _STALE_MESSAGE = "The update you checked is no longer the one on record. Refresh the check and try again."
 
 
@@ -1667,7 +2072,7 @@ def _current_branch_head(component: str, repo: str, ref: str) -> str:
     return head["head_commit"].lower()
 
 
-def stage_online_package(component: str, source_type: str, ref: str | None = None, commit: str | None = None) -> dict:
+def stage_online_package(component: str, source_type: str, ref: str | None = None, commit: str | None = None, *, version: str | None = None, source: dict | None = None) -> dict:
     """Download, inspect and stage an online package.
 
     With ``commit`` (1.17.98) the stage is pinned to what the check showed: the commit must equal the saved
@@ -1675,10 +2080,16 @@ def stage_online_package(component: str, source_type: str, ref: str | None = Non
     Anything else raises StaleCandidateError; Core never installs another commit silently. Without
     ``commit`` the branch or release is resolved as before; when GitHub cannot be reached the saved answer
     is refused (GithubUnreachableError), never staged. Full archive verification runs either way.
+
+    ``source_type`` "version" (1.18.43, AD-77) stages one build of ``list_versions``: ``version`` must be a row of the list
+    read now (else StaleCandidateError), ``commit`` if given must be that row's, ``source`` is the server's saved update
+    source, and the tree must carry a verified signed release file.
     """
     if component not in COMPONENTS:
         raise SystemUpdateError("component must be framework or ui")
     repo = _repo_name(component)
+    if source_type == "version":
+        return _stage_version(component, repo, version, commit, source)
     pinned = None
     if commit is not None and str(commit).strip():
         pinned = str(commit).strip().lower()
@@ -1725,7 +2136,7 @@ def stage_online_package(component: str, source_type: str, ref: str | None = Non
         shaish = commit
         source = {"type": "branch", "repository": repo, "ref": branch, "commit": commit}
     else:
-        raise SystemUpdateError("source_type must be release or branch")
+        raise SystemUpdateError("source_type must be release, branch or version")
 
     url = f"https://api.github.com/repos/{repo}/zipball/{urllib.parse.quote(shaish, safe='')}"
     filename = f"{component}-{source_type}-{str(shaish)[:12]}.zip"

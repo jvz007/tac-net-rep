@@ -65,6 +65,11 @@ spec.loader.exec_module(su)
 
 su._read_config = dict
 su._annotate_trust_acceptance = lambda trust: trust
+# 1.18.43: the downgrade limits read the installed modules, the applied migrations and the installed UI; stubbed here to "none",
+# so the downgrade cases below still exercise the flag and the install gate (the limits have their own test).
+su._extensions_root = lambda: Path(tempfile.mkdtemp(prefix="gh-stale-ext-"))
+su._applied_core_migrations = lambda: set()
+su._component_root = lambda component: Path(tempfile.mkdtemp(prefix="gh-stale-root-"))
 INSTALLED = {"version": "1.17.104"}
 su._installed_version = lambda component: INSTALLED["version"]
 su._installed_source_commit = lambda component, repo: ("b" * 40, {"type": "branch", "ref": "dev"})

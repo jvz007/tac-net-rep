@@ -256,7 +256,7 @@ for node in ast.walk(post):
         base = node.func.value
         if isinstance(base, ast.Attribute) and base.attr == "data" and isinstance(node.args[0], ast.Constant):
             read.add(node.args[0].value)
-must(read == {"component", "source_type", "ref", "commit"}, f"the stage view reads {read}")
+must(read == {"component", "source_type", "ref", "commit", "version"}, f"the stage view reads {read}")
 must(set(entry["request"]) == read, "the contract must list the keys the view reads")
 must("_require_module_manager" in ast.get_source_segment(views_src, post), "the view must require module manager rights")
 online = details["/api/tfd/system/updates/online/"]["GET"]
