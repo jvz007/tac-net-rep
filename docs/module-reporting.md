@@ -228,10 +228,21 @@ objects = scoped_report_manager(server_wide=True)
 - `model_row_scope` reports `enforced` true and `server_wide` true for such a model. A pathless `scoped_report_manager()` without the flag stays
   `enforced` false, so a module that has not opted in behaves exactly as before and Report Manager still refuses it.
 - Report Manager reads only `enforced`, so it needs no change.
-- Report Manager's own report permission still decides who may run a report at all. A scheduled report run with no signed-in user stays
-  unscoped by Tactical (see Limits), so the same limit holds for server-wide rows: Core's row filter is never called for it, and a schedule made
-  by a superuser could send those rows to any recipient. Report Manager's own permission decides who may schedule. Johan has been asked
-  whether this is acceptable (CQ93); until he answers, Core leaves it as it is.
+- Report Manager's own report permission still decides who may run a report at all.
+- **Scheduled runs (since 1.18.41, CQ93 option 2, AD-76).** Tactical runs a schedule with no signed-in user, so its own scheduled run is unscoped
+  and Core's `filter_by_role` is never called for it. Tactical reads `Model.objects.using('default')` instead (also as its fallback when
+  `filter_by_role` raises). A `server_wide` manager therefore overrides `using()`. Outside `tec_tac.reporting.schedule_run` it raises
+  `ScheduledReportRefused` (a `PermissionError`). Inside `schedule_run(owner_username)` the person who last saved the schedule (Tactical's
+  `modified_by`, else `created_by`) alone decides: an effective superuser at run time gets the rows, anyone else gets this plain message, which
+  Tactical stores as the error of the report history, so the person never gets an empty report:
+
+  > A scheduled report may show server-wide data only when the person who last saved the schedule is a superuser.
+
+  Core checks the owner again on every run, Run now included. The person who clicked Run now is ignored inside a run. `schedule_run` itself
+  never raises, so a report with no server-wide model still runs for a demoted owner. Only Report Manager is expected to call it, around
+  `run_scheduled_report`. Until a Report Manager that does so is installed, a scheduled server-wide report fails with the plain message (it
+  fails closed). Johan (22 November 2026, AD-76): recipients are not limited (the schedule exists to send reports to clients and an IT manager
+  who are not users on the system), and the editors of the template or saved query are not checked.
 
 ### Reading the result
 
@@ -245,5 +256,5 @@ A registered model that does not adopt the manager stays registered in Core's ow
 
 ### Limits
 
-- A report run with no signed-in user is unscoped by Tactical itself. Tactical's Celery schedule runner calls `run_scheduled_report` with no user, for native models too. Core cannot scope it without an owner for the run. This is open for Johan's decision.
+- A report run with no signed-in user is unscoped by Tactical itself for client and site scoped models. Tactical's Celery schedule runner calls `run_scheduled_report` with no user, for native models too, and Core cannot scope it. For `server_wide` models Core closes this since 1.18.41 with `schedule_run` (CQ93 option 2, AD-76, above).
 - A row that is visible still shows its own columns. Use `hidden_fields` to hide columns.

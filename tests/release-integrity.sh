@@ -55,6 +55,7 @@ python3 "${ROOT}/tests/agent-downloads-fixes-1.18.38.py"
 python3 "${ROOT}/tests/endpoint-agent-installer-1.18.39.py"
 python3 "${ROOT}/tests/audit-agent-column-1.18.39.py"
 python3 "${ROOT}/tests/installer-serve-cost-1.18.40.py"
-python3 "${ROOT}/tests/version-1.18.40.py"
+python3 "${ROOT}/tests/reporting-schedule-run-1.18.41.py"
+python3 "${ROOT}/tests/version-1.18.41.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

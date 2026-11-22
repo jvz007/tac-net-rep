@@ -17,6 +17,7 @@ bridge when every module has loaded, Core takes its bridge back, so no report mo
 """
 from __future__ import annotations
 
+import contextvars
 import copy
 import inspect
 import json
@@ -24,6 +25,7 @@ import logging
 import re
 import sys
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -991,11 +993,64 @@ def _scoped_queryset(queryset, user, *, client_path, site_path, include_unassign
         return queryset.none()
 
 
+SCHEDULE_RUN_REFUSED_MESSAGE = (
+    "A scheduled report may show server-wide data only when the person who last saved the schedule is a superuser."
+)
+
+
+class ScheduledReportRefused(PermissionError):
+    """Raised (1.18.41, AD-76) when a scheduled run would read a server-wide report model and the schedule's owner is not an effective
+    superuser. Tactical's run_report turns any exception into the error text of the report history, so the person reads the plain
+    message and never gets an empty report."""
+
+    def __init__(self, message: str = SCHEDULE_RUN_REFUSED_MESSAGE):
+        super().__init__(message)
+
+
+# None outside a scheduled run; {"owner_ok": bool} inside one (1.18.41, AD-76).
+_SCHEDULE_RUN: contextvars.ContextVar = contextvars.ContextVar("tec_tac_report_schedule_run", default=None)
+
+
+@contextmanager
+def schedule_run(owner_username):
+    """Mark the code inside the block as one scheduled report run (1.18.41, AD-76, CQ93 option 2). Yields ``owner_ok``.
+
+    ``owner_username`` is the person who last saved the schedule (Tactical's ``modified_by``, else ``created_by``). The user is looked up by
+    exact username and checked with ``is_effective_superuser`` at this moment, so a demoted or deactivated owner fails on the next run. An
+    empty, None or unknown name and any lookup error mean the owner is not OK (fail closed). It never raises by itself: a report with no
+    server-wide model still runs. Inside the block a server-wide model decides by the owner alone (the person who clicked Run now is
+    ignored); the state is always reset on exit, also after an exception, and a nested block restores the outer state."""
+    owner_ok = False
+    try:
+        name = owner_username.strip() if isinstance(owner_username, str) else ""
+        if name:
+            from django.contrib.auth import get_user_model
+
+            from .rbac import is_effective_superuser
+
+            owner_ok = bool(is_effective_superuser(get_user_model().objects.get(username=name)))
+    except Exception:
+        owner_ok = False
+    token = _SCHEDULE_RUN.set({"owner_ok": owner_ok})
+    try:
+        yield owner_ok
+    finally:
+        _SCHEDULE_RUN.reset(token)
+
+
 def _server_wide_queryset(queryset, user):
     """Rows of a server_wide model (1.17.30, AD-34 condition 3): every row for an effective superuser, none for anyone else.
 
     An effective superuser is a Django superuser or a role with is_superuser. A role with no client or site limits is not enough (this
-    replaces the 1.17.29 rule). No user, no role, an installer user and any error give no rows. Never raises."""
+    replaces the 1.17.29 rule). No user, no role, an installer user and any error give no rows. Outside a scheduled run it never raises.
+
+    Inside ``schedule_run`` (1.18.41, AD-76) the owner of the schedule alone decides: an owner who is an effective superuser gets the
+    queryset, any other owner raises ``ScheduledReportRefused``. The person who clicked Run now is ignored there."""
+    state = _SCHEDULE_RUN.get()
+    if state is not None:
+        if state.get("owner_ok") is True:
+            return queryset
+        raise ScheduledReportRefused()
     try:
         from .rbac import is_effective_superuser
 
@@ -1032,6 +1087,15 @@ def _scoped_manager_class():
                 client_path=self.client_field, site_path=self.site_field, include_unassigned=self.include_unassigned,
             )
 
+        def using(self, alias):
+            """1.18.41 (AD-76): Tactical's scheduler and its fallback read ``Model.objects.using('default')``, which skips filter_by_role.
+            A server-wide model refuses that outside a scheduled run, and inside one when the owner is not an effective superuser."""
+            if self._server_wide:
+                state = _SCHEDULE_RUN.get()
+                if state is None or state.get("owner_ok") is not True:
+                    raise ScheduledReportRefused()
+            return super().using(alias)
+
     _SCOPE_MANAGER_CLASS = ScopedReportManager
     return _SCOPE_MANAGER_CLASS
 
@@ -1054,7 +1118,9 @@ def scoped_report_manager(
     ``include_unassigned``. Since 1.17.30 (AD-34 condition 3) its ``filter_by_role`` shows every row to an effective superuser
     (a Django superuser or a role superuser) only. A role with no client or site limits, a scoped role, no role, no user and any
     error see none. Server modules will get their own role system later (AD-34 condition 4). A report run with no signed-in user
-    never calls ``filter_by_role`` and stays unscoped (CQ15 a). ``model_row_scope`` reports ``enforced`` true, because the choice is declared.
+    never calls ``filter_by_role`` (CQ15 a). Since 1.18.41 (AD-76) such a model's ``using()`` raises outside ``schedule_run``, and inside
+    it the schedule owner alone decides (an effective superuser, else ``ScheduledReportRefused``).
+    ``model_row_scope`` reports ``enforced`` true, because the choice is declared.
     """
     if not isinstance(include_unassigned, bool):
         raise ReportingRegistrationError("include_unassigned must be true or false.")
