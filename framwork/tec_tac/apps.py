@@ -185,6 +185,14 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac core.module_dependants capability could not be registered")
 
+        # 1.18.44: the capability that follows a bulk run after the page is closed. Its own try block: a fault is logged and never stops start-up.
+        try:
+            from .result_checks import register_core_result_checks_capability
+
+            register_core_result_checks_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.result_checks capability could not be registered")
+
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so
         # modules never need to import ee.reporting internals themselves.

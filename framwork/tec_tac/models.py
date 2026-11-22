@@ -819,3 +819,65 @@ class TecTacSecret(models.Model):
 
     def __str__(self):
         return f"{self.owner_module}:{self.name}"
+
+
+class TecTacResultCheck(models.Model):
+    """One follow-up of a bulk run, so the result reaches the person after they close the tab (core.result_checks 1.0.0, Core 1.18.44).
+
+    A module's reader is asked once a minute, as the person who started the check, which endpoints have a result. Core stores states and
+    exit codes only, never output text and never the module's own reference data beyond ``job_ref`` (at most 2 KiB, chosen by the module).
+    ``queued_until`` and ``running_until`` are leases: the Scheduler tick sends a message once per lease, and a worker claims the row with
+    an atomic update, so a duplicate delivery runs nothing twice. A closed check is deleted 30 days after ``closed_at``.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        CLOSED = "closed", "Closed"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    module_id = models.CharField(max_length=100)
+    reader_id = models.CharField(max_length=160)
+    label = models.CharField(max_length=80)
+    job_ref = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=8, choices=Status.choices, default=Status.OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+    next_check_at = models.DateTimeField()
+    deadline_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+    queued_until = models.DateTimeField(null=True, blank=True)
+    running_until = models.DateTimeField(null=True, blank=True)
+    notice_sent = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ("created_at",)
+        indexes = [
+            models.Index(fields=("status", "next_check_at"), name="tectac_rescheck_due_idx"),
+            models.Index(fields=("user", "status"), name="tectac_rescheck_user_idx"),
+            models.Index(fields=("status", "closed_at"), name="tectac_rescheck_closed_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.reader_id}:{self.status}"
+
+
+class TecTacResultCheckItem(models.Model):
+    """One endpoint of a result check: its state, exit code and hostname. No output text is ever stored here."""
+
+    check = models.ForeignKey(TecTacResultCheck, on_delete=models.CASCADE, related_name="items")
+    endpoint_id = models.CharField(max_length=200)
+    hostname = models.CharField(max_length=255, blank=True, default="")
+    state = models.CharField(max_length=16, default="running")
+    exit_code = models.IntegerField(null=True, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("check", "endpoint_id"), name="tectac_rescheckitem_unique"),
+        ]
+        indexes = [
+            models.Index(fields=("check", "state"), name="tectac_rescheckitem_state_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.endpoint_id}:{self.state}"

@@ -133,6 +133,16 @@ class Command(BaseCommand):
         except Exception:
             logging.getLogger("tec_tac.patch_lockdown").warning("The patch lockdown audit step failed; the next tick retries.", exc_info=True)
 
+        try:
+            # 1.18.44 (core.result_checks): queue at most 20 due result checks as Celery tasks and trim closed checks older than 30 days.
+            # The tick never calls a reader or any module code. The step never raises and logs rather than writing to the output, so the
+            # tick's own line stays the same.
+            from tec_tac.result_checks import queue_due_checks
+
+            queue_due_checks()
+        except Exception:
+            logging.getLogger("tec_tac.result_checks").warning("The result check step failed; the next tick retries.", exc_info=True)
+
         sweep_state = "error" if sweep_error else "ran"
         cleanup_state = "error" if cleanup_error else ("ran" if cleanup and cleanup.get("ran") else "not_due")
         self.stdout.write(

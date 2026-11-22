@@ -1531,6 +1531,51 @@ CORE_CONTRACTS = (
         "purpose": "updates_for_module() -> the same payload as GET /api/tfd/modules/updates/: {schema, contract, updates[], count, installable_count, levels {major, minor, patch, other}, availability {state, message}, last_detection, generated_at}. Each updates[] row is {module_id, name, installed_version, available_version, level (patch, minor or major from plain X.Y.Z; a pre-release, a -N rebuild or any other version is other), repository_id, repository_name, channel, release_notes_url (https or null), installable, blocked_reasons[] {code, message}, blocked_reason (the first message or null), source_current}. Codes: core_required, ui_required, runtime_unknown, dependency_missing, dependency_update, source_changed. Read-only: nothing is written and no network call is made; the list is the cached Online catalog, so a licensed repository lists only entitled releases and a refused licence lists none. (1.17.104, additive; capability core.module_updates 1.0.0; needs framework >=1.17.104). The caller must be an installed, enabled module of catalog category server, its own server-side code, verified by Core from the call stack (AD-26); any other caller (a core, premium or test module, Core, a library) gets ModuleUpdatesError caller_not_allowed (403) and one deny audit row (object_type module_update, at most one per caller and reason every 5 minutes per process). Feature-detect with has_capability('core.module_updates'). See docs/module-updates.md.",
         "audience": "consumer/backend",
     },
+    {
+        "area": "result-checks",
+        "import_path": "tec_tac.result_checks",
+        "name": "register_reader",
+        "kind": "python",
+        "purpose": (
+            "register_reader(*, id, module_id, reader) -> id (1.18.44; capability core.result_checks 1.0.0, operation register_reader; framework >=1.18.44; Johan, 22 November 2026: a bulk run must still tell the person its result after the page is closed). "
+            "Call it from the module's AppConfig.ready(); it touches memory only. id is '<module_id>.<name>' (for example scriptexecution.bulk-script). The module must be an installed, enabled, non-legacy extension and the reader's code must lie inside the module's own folder (the same checks as event jobs). "
+            "Registering the identical definition again returns without error; a different one raises ResultCheckRegistrationError (a ValueError). Wrap the call, log and go on, so Tactical always starts. "
+            "reader(job_ref, endpoint_ids, user) -> {endpoint_id: {state, exit_code, hostname}}: job_ref is a copy of the JSON object the module gave to start, endpoint_ids is a list of at most 500 ids, user is the person who started the check. state is done, failed, offline or running; exit_code is an int or None; hostname is text. "
+            "Core calls the reader once a minute, in a Celery worker, as that person: there is no trusted global read, so the reader sees only what the person may see. "
+            "The handler must be idempotent and read-only: it can run again for the same ids, it must change nothing, and it must never return output text (Core stores none). "
+            "Fail closed: a reader that raises, answers a non-dict, or leaves out an id, an unknown state, a non-int exit code or a non-text hostname leaves that item running; the check is asked again next minute and still closes at its deadline, the items still running becoming no_result. Unknown ids in the answer are ignored. "
+            "Feature-detect with has_capability('core.result_checks') and set requires.framework >=1.18.44. Needs migration 0048_result_checks. See docs/result-checks.md."
+        ),
+        "audience": "provider/backend",
+    },
+    {
+        "area": "result-checks",
+        "import_path": "tec_tac.result_checks",
+        "name": "start",
+        "kind": "python",
+        "purpose": (
+            "start(user, *, reader_id, label, endpoint_ids, job_ref, deadline_seconds) -> check id text (1.18.44; capability core.result_checks 1.0.0, operation start; framework >=1.18.44). "
+            "Starts the follow-up of one bulk run for user, the person who started it. label is 1 to 80 printable characters (it names the run in the notice); endpoint_ids is 1 to 1000 unique ids of at most 200 characters; job_ref is a JSON object of at most 2 KiB that only the module's own reader reads; deadline_seconds is a whole number from 60 to 86400. "
+            "Caller rule (rule 1.10, AD-26): only the module that owns the reader may call start, from its own code (the frame walk). Core, an unverified caller and another module are refused with ResultCheckRefused. "
+            "The person must be active, not an installer or agent account and not blocked from the dashboard, and may have 20 open checks at most (counted under a row lock, so two parallel starts cannot pass the cap). An argument outside a limit raises ResultCheckInvalid (a ValueError). Nothing is stored on a refusal. "
+            "Core stores one check and one row per endpoint (endpoint id, hostname, state, exit code, check time) and never output text. The first check is due 60 seconds after start. "
+            "It closes when no item is running or at the deadline. Then Core sends the person ONE notice, '<label>: N done, M failed, K offline[, L no result]', that links to /results/<id>, and writes one Core audit row custom:result-check-closed (counts only). A closed check is deleted after 30 days. "
+            "Read the result with GET /api/tfd/ui/result-checks/<id>/ (the person who started the check only). See docs/result-checks.md."
+        ),
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "result-checks",
+        "import_path": "tec_tac.result_checks",
+        "name": "ResultCheckRefused",
+        "kind": "python",
+        "purpose": (
+            "ResultCheckRefused (1.18.44; framework >=1.18.44): what start raises when it will not start a check. code is one of caller (Core or an unverified caller), unknown_reader, not_owner (the reader belongs to another module), user (not a person who can receive a notice) and too_many_open (20 open checks). "
+            "The text is a plain sentence that names no module; show it to the person. A refusal for a wrong caller writes at most one Core audit row custom:result-check-refused per module and reason per 5 minutes (the reason code only). "
+            "ResultCheckInvalid (a ValueError) is the other error of start: an argument outside its limit. ResultCheckRegistrationError (a ValueError) is the error of register_reader."
+        ),
+        "audience": "consumer/backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -2736,6 +2781,33 @@ HTTP_CONTRACT_DETAILS = {
             },
         },
     },
+    "/api/tfd/ui/result-checks/<uuid:check_id>/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; only the person who started the check (a superuser who did not start it is not an exception)",
+            "added": "1.18.44 (core.result_checks 1.0.0)",
+            "query": {"page": "positive whole number, default 1", "page_size": "whole number from 1 to 100, default 50"},
+            "response": {
+                "id": "the check id",
+                "label": "the name the module gave the run",
+                "status": "open or closed",
+                "created_at": "ISO time",
+                "closed_at": "ISO time, or null while open",
+                "deadline_at": "ISO time",
+                "summary": "{total, done, failed, offline, running, no_result}",
+                "message": "one sentence: the same text the closing notice carries, or a 'still checking' sentence while open",
+                "items": "[{endpoint_id, hostname, state, exit_code}] sorted by hostname then endpoint id, one page",
+                "count": "all items of the check",
+                "page": "the page returned",
+                "page_size": "the page size used",
+                "next_page": "the next page number, or null at the end",
+            },
+            "errors": {"400": "page or page_size is not a valid positive whole number", "404": "{\"detail\": \"Not found.\"}: no such check, a check of another person, a check older than the 30-day retention, or an inactive person; all the same body, so existence is not revealed"},
+            "notes": [
+                "No output text, no job reference, no reader id and no module id is ever returned. A success body uses message, never detail or error.",
+                "The states are running, done, failed, offline and no_result (still running at the deadline). offline is final: an endpoint that comes back later is not followed.",
+            ],
+        },
+    },
 }
 
 
@@ -3302,6 +3374,7 @@ RULES = (
     "Module categories (AD-21, since 1.17.13): the manifest key category accepts core, server, premium and test. A manifest with no category is treated as test, and Core refuses to install a test module on a server that is not a development server (root config TEC_TAC_ENVIRONMENT); the refusal is install-only since 1.17.14, so a module that is already installed keeps loading and can be enabled. Module status, the runtime context and the modules/v2 catalogue carry category, effective_category, category_missing, category_refused and category_warning (docs/module-categories.md). A manifest that writes premium or test must require framework >=1.17.13, because an older Core rejects the value. The Tactical operations executor and the AD-20 replacement checks use the effective category: a replacement must be premium (or have no category on a development server, reason code replacement-category), and a test module may not declare replaces.",
     "A module that is neither a core nor a server module may replace one core or server module (AD-20, since 1.17.9; server modules since 1.17.11) by declaring replaces=<module id> and capabilities={id: X.Y.Z} in tec_tac.json; the replaced module declares capabilities too (an empty {} is allowed). Core honours the replacement only while the replacement is enabled, the replaced module is installed and disabled, no other enabled module replaces it, and the replacement declares every capability of the replaced module at the same major version with a minor.patch that is not lower. While honoured the replacement owns the replaced core module's Tactical routes (and no others; a server module has none) and may register its capability names, and it satisfies a hard dependency on the replaced module id (1.17.11). Enabling or installing the replacement names the module it will disable (will_disable) and disables it in the same job once the exact list is confirmed (disable_replaced); the root job helper re-checks the rules. If state shows both enabled, Core does not load the replacement, reports it as not enabled, queues a job that disables it and keeps the replaced module; it never stops Tactical at start-up. Since 1.17.12 handing back is one action either way: disabling the replacement switches the replaced module back on in the same job (when it can be enabled), and enabling the replaced module switches its enabled replacement off in the same job, after two confirmations (disable_replaced, then confirm_replacement_switch: true). A module that uses these keys must require framework >=1.17.9 (>=1.17.11 for category server or for any of the 1.17.11 behaviour). Other modules keep calling capabilities by name.",
     "Module switch fields (AD-20, the HTTP fields the Modules page uses, listed here because this export carries rules and browser rows, not the HTTP field tables; the route entries for /api/tfd/modules/v2/ and /api/tfd/modules/v2/<id>/state/ carry the full tables). On GET /api/tfd/modules/v2/ each module row has will_disable (the modules that enabling it switches off), will_enable (the replaced modules that disabling it hands back, only those that can come back), second_confirmation_required (enabling a replaced module whose replacement is enabled), and, since 1.17.14, replacement_dependants ([{replacement, modules[]}]: the enabled modules that name that replacement directly), hand_back_unavailable ([{module, reasons[], required_modules[]}]: the replaced modules that cannot come back, with the modules they need) and hand_back_confirmation_required (boolean). The request to POST /api/tfd/modules/v2/<id>/state/ may carry disable_replaced (the list the operator was shown), confirm_replacement_switch (the second confirmation, exactly true) and, since 1.17.14, confirm_without_hand_back (exactly true, to disable a replacement whose replaced module cannot come back). The refusal codes are replacement_confirmation_required, replacement_second_confirmation_required (since 1.17.14 it also carries dependants) and, since 1.17.14, replacement_hand_back_confirmation_required (it carries module, will_enable and hand_back_unavailable); each answer carries detail in plain English and queues nothing. A module job carries disabled_modules, enabled_modules and reconciled_modules (what the root helper switched) and, since 1.17.14, hand_back_skipped (the replaced modules a confirmed disable left off). The problem type replacement_has_dependants and the hand_back_blocked refusal were removed in 1.17.14: where 1.17.12 said a disable or an enable was refused for those reasons, it now warns, asks for the confirmation, and continues once it is given. Old callers that send no new flag see the refusal and nothing changes. Since 1.18.11 each row also has always_on, lifecycle_locked and lifecycle_lock_reason (a core module always stays installed and on). POST /api/tfd/modules/v2/<id>/state/ (disable) and POST /api/tfd/modules/<id>/remove/ answer HTTP 400 with code core_module_locked and a plain detail for a locked core module, and GET /api/tfd/modules/v2/<id>/remove-check/ keeps valid and dependants as before (valid means no enabled module needs it) and adds locked and message, so a client that stops on valid false still reaches the remove call and its core_module_locked answer. Not locked on a development server or while a premium replacement is honoured.",
+    "Result checks (core.result_checks 1.0.0, Core 1.18.44): a module that starts a bulk run and wants the person told when the results are in registers a reader from AppConfig.ready() with tec_tac.result_checks.register_reader(id, module_id, reader) and calls tec_tac.result_checks.start(user, reader_id=..., label=..., endpoint_ids=..., job_ref=..., deadline_seconds=...) from its own code. Core asks the reader once a minute as the person (the reader must be idempotent and read-only), stores states and exit codes only, sends one notice linking to /results/<id> and answers the starter alone at GET /api/tfd/ui/result-checks/<id>/. See docs/result-checks.md.",
     "Notices Core creates itself (1.17.14, Johan CQ36 and CQ41): when a module job fails (enable, disable, install, bundle install or batch install) the scheduler tick stores one notice per recipient, readable through GET /api/tfd/ui/notices/ like any other: source core, level error, client_id module-job-failed:<job id>, action route /modules. Recipients are every active superuser and the user who started the job. A failed switch says whether the flags were put back. The text is plain English and holds no paths. The browser toast for a new server-created notice is a UI change; until then the notice shows in the notice history.",
     "A core or server module that declares `capabilities` in tec_tac.json must register exactly the capability ids it declares, and a replacement must register at the declared major version with a minor.patch that is not lower (since 1.17.10; server modules since 1.17.11). Core does not register anything else: it logs one warning, registers nothing, drops an earlier registration of the same id by the same module (1.17.11) and never raises out of AppConfig.ready(). A module with no `capabilities` key is unchanged.",
     "A Tactical call that must be audited (reboot, Wake-on-LAN, report changes, code signing) is declared once by the owning core module with tec_tac.tactical_operations.register_tactical_operation and run through core.tactical_operations (POST /api/tfd/tactical-operations/<module_id>/<operation_id>/ or the capability's run). Core writes the audit row where the call happens, so the browser cannot misreport it. The browser-declared audit_events path is deprecated since 1.17.7 for declared events (see docs/module-audit.md for the replacement of each event).",

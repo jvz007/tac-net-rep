@@ -349,4 +349,6 @@ A provider should still not call another capability's status from its health cal
 
 `core.module_dependants` 1.0.0 (Core 1.17.71, `dependants()`): which installed modules name the calling module in their signed `dependencies` or `optional_dependencies`. Answers only about the caller itself, fails closed. See `docs/module-dependants.md`.
 
+`core.result_checks` 1.0.0 (Core 1.18.44, `register_reader()` and `start()`): follow a bulk run after the page is closed and tell the person once when the results are in. States and exit codes only, no output text; the reader runs as the person; only the reader's own module may start a check. See `docs/result-checks.md`.
+
 `core.client_address` 1.0.0 (Core 1.18.6, additive, read-only `client_address(request)`): the address of a request as Core itself resolves it, with Core's own trusted proxy list and no policy argument. An empty string means unknown, and the consumer refuses. Needs framework >=1.18.6. See `docs/client-address.md`.

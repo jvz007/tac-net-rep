@@ -20,6 +20,7 @@ from .filter_set_views import FilterSetListCreateView, FilterSetDetailView, Filt
 from .preference_views import UserPreferencesView
 from .module_preference_views import ModulePreferenceDetailView, ModulePreferenceListView
 from .notice_views import NoticeListCreateView, NoticeReadView, NoticeReadAllView, NoticeClearReadView
+from .result_check_views import ResultCheckView
 from .mfa_backup_views import MfaBackupCodesView, AdminUserMfaRecoveryView, BackupCodeLoginView
 from .housekeeping_views import HousekeepingStatusView, HousekeepingPurgeView
 from .diagnostic_views import SystemDiagnosticsView
@@ -132,6 +133,7 @@ urlpatterns = [
     path("ui/notices/<uuid:notice_id>/read/", NoticeReadView.as_view(), name="tec-tac-notice-read"),
     path("ui/notices/read-all/", NoticeReadAllView.as_view(), name="tec-tac-notices-read-all"),
     path("ui/notices/clear-read/", NoticeClearReadView.as_view(), name="tec-tac-notices-clear-read"),
+    path("ui/result-checks/<uuid:check_id>/", ResultCheckView.as_view(), name="tec-tac-ui-result-check"),
     path("system/runtime-settings/", RuntimeSettingsView.as_view(), name="tec-tac-runtime-settings"),
     path("system/update-source/", UpdateSourceView.as_view(), name="tec-tac-update-source"),
     path("system/licensing/", LicensingStatusView.as_view(), name="tec-tac-licensing-status"),

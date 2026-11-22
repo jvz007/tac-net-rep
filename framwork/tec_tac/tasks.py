@@ -235,6 +235,15 @@ def execute_event_job(self, row_id: str):
     return run_event_job(row_id, celery_task_id=str(getattr(self.request, "id", "") or ""))
 
 
+@app.task(name="tec_tac.run_result_check", acks_late=True, ignore_result=True, soft_time_limit=100, time_limit=120)
+def run_result_check(check_id: str):
+    """One pass over one result check (core.result_checks 1.0.0, Core 1.18.44). The Scheduler tick queues it; ``run_check`` claims the row
+    with an atomic update, so a duplicate delivery runs nothing twice, and it calls the module's reader once, as the person who started it."""
+    from .result_checks import run_check
+
+    return run_check(check_id)
+
+
 @app.task(name="tec_tac.note_event_job_refusals", ignore_result=True, time_limit=60)
 def note_event_job_refusals(entries):
     """Core-internal (Core 1.17.49, not a module contract). A web process sends the refusal counts of event-job publishes here in bulk, so

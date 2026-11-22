@@ -30,6 +30,7 @@ CORE_CALLBACK_GROUPS = {
     "tec_tac.scheduler_views": "Tec-Tac · Scheduler",
     "tec_tac.preference_views": "Tec-Tac · UI Runtime",
     "tec_tac.notice_views": "Tec-Tac · UI Runtime",
+    "tec_tac.result_check_views": "Tec-Tac · UI Runtime",
     "tec_tac.module_preference_views": "Tec-Tac · UI Runtime",
     "tec_tac.diagnostic_views": "Tec-Tac · Diagnostics",
     "tec_tac.server_backup_views": "Tec-Tac · Backup & Restore",
