@@ -20,7 +20,7 @@ from typing import Any
 MAX_SELECTION = 50
 MAX_CLOSURE = 100
 MAX_ROUNDS = 8
-PURPOSES = ("install", "upgrade")
+PURPOSES = ("install",)
 ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 # Checks that need the real package. The install path still runs them on the signed manifest.
 CHECKS_DEFERRED = ["replacement", "rename", "signature", "licence-in-manifest"]
@@ -39,8 +39,6 @@ TEXT = {
     "plan_unstable": "The plan did not settle, so nothing is offered. Plan again with fewer modules.",
     "dependency_blocked": "A module it needs cannot be installed.",
     "bad_version": "The version of this release could not be read.",
-    "not_installed": "This module is not installed, so there is nothing to upgrade. Install it on its own.",
-    "other_source": "This module comes from another repository. Upgrade it on its own.",
 }
 
 
@@ -61,12 +59,37 @@ def clean_selection(value: Any) -> list[str]:
     return seen
 
 
+def clean_batch_items(value: Any) -> list[dict]:
+    """Core 1.18.42: the body ``items`` of the online stage/batch route. 1 to 50 objects with the text fields repository_id, module_id (a well-formed
+    id, no repeats) and version, all required. Returns clean copies with only those three keys. Anything else raises BadSelection."""
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_SELECTION:
+        raise BadSelection("items must be a list of 1 to 50 modules, each with repository_id, module_id and version")
+    clean: list[dict] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise BadSelection("every item needs repository_id, module_id and version")
+        fields = {}
+        for name in ("repository_id", "module_id", "version"):
+            text = item.get(name)
+            if not isinstance(text, str) or not text.strip():
+                raise BadSelection(f"every item needs {name} as text")
+            fields[name] = text.strip()
+        if not ID_RE.fullmatch(fields["module_id"]):
+            raise BadSelection("every module id must be lower case letters, digits, '-' or '_'")
+        if fields["module_id"] in seen:
+            raise BadSelection(f"{fields['module_id']} is listed twice")
+        seen.add(fields["module_id"])
+        clean.append(fields)
+    return clean
+
+
 def clean_purpose(value: Any) -> str:
-    """Core 1.18.35: "install" (the default when the field is missing or null) or "upgrade". Anything else raises BadSelection."""
+    """The purpose is "install" (the default when the field is missing or null). Core 1.18.42: "upgrade" is gone (Upgrade selected uses stage/batch); anything else raises BadSelection."""
     if value is None:
         return "install"
     if not isinstance(value, str) or value not in PURPOSES:
-        raise BadSelection('purpose must be "install" or "upgrade"')
+        raise BadSelection('purpose must be "install"')
     return value
 
 
@@ -74,7 +97,7 @@ def _cut(value: Any, limit: int = 400) -> str:
     return " ".join(str(value or "").split())[:limit]
 
 
-def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfies, problem_text, refuse_disabled, protected, runtime_check, purpose="install", licensing_repo_ids=None, upgrade_release=None):
+def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfies, problem_text, refuse_disabled, protected, runtime_check, purpose="install"):
     """The plan as a dict. Every collaborator is passed in, so this runs without Django.
 
     * ``allowed_body``: the whitelisted body of ``read_allowed_modules()``.
@@ -83,15 +106,7 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
     * ``resolve(candidates)``: ``resolve_install_plan``. ``satisfies(version, constraint)``: ``version_satisfies``.
     * ``problem_text(problem)``: the resolver's own sentence. ``refuse_disabled(candidate)``: a sentence or None.
     * ``protected``: ids that are never installed from here. ``runtime_check(requires)``: the runtime checks of a candidate.
-    * ``purpose`` (1.18.35): "install" (default, nothing changes) or "upgrade": a module that is not installed is blocked ``not_installed``, one whose
-      recorded source repository is not a licensing repository (``licensing_repo_ids``; None skips the check) is blocked ``other_source``, and no
-      dependency module is added (a missing one is reported by the shared resolver, as a single upgrade does).
-    * ``upgrade_release`` (1.18.38): required for purpose "upgrade". ``upgrade_release(module_id)`` gives the cache row the single Upgrade would
-      install (``module_repository.upgrade_selector()``) or None. An upgrade takes its release from it, never from the allowed list; the plan
-      still reads the allowed list for its state, revision and time and fails closed when that state is not ok. Install purpose is unchanged."""
-    upgrade = purpose == "upgrade"
-    if upgrade and upgrade_release is None:
-        raise ValueError("purpose upgrade needs upgrade_release: an upgrade never falls back to the allowed list")
+    * ``purpose``: "install". It is only echoed in the body, so a reader of the plan (Welcome) sees the same key as before."""
     top = {"plan_state": allowed_body.get("plan_state"), "plan_revision": allowed_body.get("plan_revision"), "fetched_at": allowed_body.get("fetched_at")}
     base = {"ok": False, "state": allowed_body.get("state"), "message": allowed_body.get("message"), "valid": False, "requested": list(selection),
             "purpose": purpose, "order": [], "added_dependencies": [], "will_disable": [], "conflicts": [], "blocked": [], "optional_dependencies": [],
@@ -109,39 +124,22 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
         """(candidate, None) for a module Core can plan, else (None, (code, detail))."""
         if module_id in protected:
             return None, ("protected", {})
-        if upgrade:
-            have = installed.get(module_id)
-            if have is None:
-                return None, ("not_installed", {})
-            pinned = ((have.get("source") or {}).get("repository_id"))
-            if pinned and licensing_repo_ids is not None and pinned not in licensing_repo_ids:  # the stage step refuses a module pinned elsewhere
-                return None, ("other_source", {})
-            # 1.18.38: the release is the one the single Upgrade selects, not a row of the allowed list.
-            cache = upgrade_release(module_id)
-            if cache is None or cache.get("download_unavailable"):
-                return None, ("not_in_catalogue_cache", {})
-            chosen_repo = cache.get("repository_id")
-            if (pinned and chosen_repo != pinned) or (licensing_repo_ids is not None and chosen_repo not in licensing_repo_ids):
-                return None, ("other_source", {})
-            version = str(cache.get("version") or "")
-            row = allowed.get(module_id) or {}
-        else:
-            row = allowed.get(module_id)
-            if row is None:
-                return None, ("not_in_allowed_list", {})
-            release = row.get("release")
-            if not row.get("selected"):
-                return None, ("not_selected", {})
-            if not release:
-                return None, ("no_release", {})
-            if row.get("availability") != "available" or not row.get("entitled"):
-                return None, ("not_available", {"availability": row.get("availability")})
-            cache = cache_rows.get((module_id, release.get("release_id")))
-            if cache is None or cache.get("download_unavailable"):
-                return None, ("not_in_catalogue_cache", {})
-            version = str(release.get("version") or "")
-            if cache.get("version") and str(cache["version"]) != version:  # 1.18.20: the entry must be this release, not another one with the same id
-                return None, ("not_in_catalogue_cache", {})
+        row = allowed.get(module_id)
+        if row is None:
+            return None, ("not_in_allowed_list", {})
+        release = row.get("release")
+        if not row.get("selected"):
+            return None, ("not_selected", {})
+        if not release:
+            return None, ("no_release", {})
+        if row.get("availability") != "available" or not row.get("entitled"):
+            return None, ("not_available", {"availability": row.get("availability")})
+        cache = cache_rows.get((module_id, release.get("release_id")))
+        if cache is None or cache.get("download_unavailable"):
+            return None, ("not_in_catalogue_cache", {})
+        version = str(release.get("version") or "")
+        if cache.get("version") and str(cache["version"]) != version:  # 1.18.20: the entry must be this release, not another one with the same id
+            return None, ("not_in_catalogue_cache", {})
         candidate = {"id": module_id, "name": cache.get("name") or row.get("name") or module_id, "extension_version": version,
                      "dependencies": dict(cache.get("dependencies") or {}), "optional_dependencies": dict(cache.get("optional_dependencies") or {}),
                      "requires": dict(cache.get("requires") or {}), "category": cache.get("category") or row.get("category")}
@@ -187,8 +185,8 @@ def build_plan(selection, allowed_body, cache_rows, installed, resolve, satisfie
                         changed = True
                         break
                     if dep_id not in chosen:
-                        if upgrade or len(chosen) >= MAX_CLOSURE:
-                            continue  # an upgrade adds no module: a missing dependency is the resolver's to report
+                        if len(chosen) >= MAX_CLOSURE:
+                            continue
                         candidate, _why = offer(dep_id)
                         if candidate is None or not _fits(satisfies, candidate["extension_version"], constraint):
                             continue  # left out: the shared resolver reports it as missing or out of range
@@ -304,18 +302,15 @@ def plan_online_install(selection: list[str], purpose: str = "install") -> dict:
     from .module_manager import PROTECTED_PLUGIN_IDS
     from .module_state import version_satisfies
 
-    upgrade = purpose == "upgrade"
     allowed_body = licensing_catalogue_source.read_allowed_modules()
     if allowed_body.get("state") != "ok":
-        return build_plan(selection, allowed_body, {}, {}, None, None, None, None, frozenset(), None, purpose=purpose,
-                          upgrade_release=(lambda _module_id: None) if upgrade else None)
+        return build_plan(selection, allowed_body, {}, {}, None, None, None, None, frozenset(), None, purpose=purpose)
     repos = [repo for repo in module_repository.list_repositories() if repo.get("kind") == "licensing" and repo.get("enabled", True)]
     cache_rows: dict[tuple, dict] = {}
-    if not upgrade:  # an upgrade takes no allowed-list release, so it needs no release-id lookup
-        development = module_repository.is_development_server() if repos else False
-        for repo in repos:
-            for item in module_repository._cached_modules(repo, development=development):
-                cache_rows.setdefault((item.get("id"), item.get("release_id")), item)
+    development = module_repository.is_development_server() if repos else False
+    for repo in repos:
+        for item in module_repository._cached_modules(repo, development=development):
+            cache_rows.setdefault((item.get("id"), item.get("release_id")), item)
     installed = {item["id"]: item for item in module_manager_v2.installed_catalog_v2() if not item.get("legacy")}
 
     def refuse_disabled(candidate):
@@ -327,5 +322,4 @@ def plan_online_install(selection: list[str], purpose: str = "install") -> dict:
 
     return build_plan(selection, allowed_body, cache_rows, installed, module_manager_v2.resolve_install_plan, version_satisfies,
                       module_manager_v2._problem_text, refuse_disabled, PROTECTED_PLUGIN_IDS, module_manager_v2._check_runtime_requirements,
-                      purpose=purpose, licensing_repo_ids=frozenset(repo.get("id") for repo in repos),
-                      upgrade_release=module_repository.upgrade_selector() if upgrade else None)
+                      purpose=purpose)

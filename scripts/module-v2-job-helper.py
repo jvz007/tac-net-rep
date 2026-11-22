@@ -1223,12 +1223,28 @@ def _cleanup_claimed_job_inputs(job_id):
 
 
 def dispatch(job_id):
+    """Claim the job, then start the worker as its own transient systemd unit (Core 1.18.42), the way system-update-helper.py and
+    server-backup-helper.py do. A Popen child stays in the cgroup of the Celery worker that called sudo, and the job's own
+    'systemctl restart celery' killed it mid-job. The job id is a uuid (load_job and claim_job check it), so the unit name is safe.
+    There is no fallback to Popen: it would bring the stuck job back."""
     claim_job(job_id)
-    subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve()), "--run", job_id],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True, close_fds=True, env=privileged_env(),
-    )
+    command = [
+        "systemd-run", "--quiet", "--collect", f"--unit=tec-tac-module-v2-job-{job_id}",
+        "--property=Type=exec",
+        sys.executable, str(Path(__file__).resolve()), "--run", job_id,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, env=privileged_env(), check=False)
+    if result.returncode != 0:
+        message = (result.stderr or "unable to create module job worker unit").strip()
+        path, job = load_job(job_id)
+        job["status"] = "failed"
+        job["stage"] = "dispatch"
+        job["finished_at"] = now()
+        job["error"] = message
+        job["error_type"] = "DispatchError"
+        atomic_json(path, job, 0o640, uid=0, gid=tactical_gid())  # as claim_job wrote it, so Core can read why
+        _cleanup_claimed_job_inputs(job_id)
+        raise SystemExit(message)
 
 
 def require_root_owned(path):

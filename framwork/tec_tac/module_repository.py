@@ -27,11 +27,13 @@ from datetime import datetime, time as dt_time, timezone
 from pathlib import Path
 
 from .safe_files import atomic_json
-from .module_manager import MAX_PACKAGE_BYTES, STAGED_ROOT, _atomic_json, _load_stage
+from .module_manager import MAX_PACKAGE_BYTES, STAGED_ROOT, ModuleManagerError, _atomic_json, _load_stage
 from .module_manager_v2 import (
     LicensingRequirementError,
     ModuleManagerV2Error,
     _check_runtime_requirements,
+    _flatten_staged,
+    _write_batch,
     installed_catalog_v2,
     stage_uploaded_artifact,
     discard_v2_stage,
@@ -1149,8 +1151,7 @@ def _development_for(repos: list[dict]) -> bool:
 
 
 def select_release(choices: list[dict], source_repo_id: str | None = None):
-    """The one release Core offers for a module (1.18.38: moved out of online_catalog without a change in behaviour, so the catalogue and the
-    bulk upgrade plan cannot drift). ``choices`` are the releases of every enabled repository for one module, download_unavailable rows already
+    """The one release Core offers for a module (1.18.38: moved out of online_catalog without a change in behaviour). ``choices`` are the releases of every enabled repository for one module, download_unavailable rows already
     left out. The repository the module is pinned to is the pool when it has a release, else every choice. Repository priority then repository id
     pick the source, and the highest version inside that source wins. Returns the cache row (with repository_id) or None."""
     ordered = sorted(choices, key=lambda item: (int(item.get("repository_priority", 100)), item.get("repository_id", ""), item.get("version", "")))
@@ -1173,26 +1174,6 @@ def select_release(choices: list[dict], source_repo_id: str | None = None):
             if selected is None or version_satisfies(candidate["version"], f">{selected['version']}"):
                 selected = candidate
     return selected
-
-
-def upgrade_selector():
-    """Core 1.18.38: ``select(module_id)`` gives the release the single Upgrade installs (the same selection as online_catalog) or None.
-    The enabled repositories' caches and the installed list are read once, with one development-server test, so the development channel and
-    the availability rules apply as in the single path. The bulk upgrade plan and run use it instead of the licence's allowed list."""
-    repos = [repo for repo in list_repositories() if repo.get("enabled", True)]
-    installed = {item["id"]: item for item in installed_catalog_v2() if not item.get("legacy")}
-    development = _development_for(repos)
-    by_module: dict[str, list[dict]] = {}
-    for repo in repos:
-        for item in _cached_modules(repo, development=development):
-            if not item.get("download_unavailable"):
-                by_module.setdefault(item["id"], []).append(item)
-
-    def select(module_id):
-        source = (installed.get(module_id) or {}).get("source") or {}
-        return select_release(by_module.get(module_id, []), source.get("repository_id"))
-
-    return select
 
 
 def online_catalog() -> dict:
@@ -1228,7 +1209,7 @@ def online_catalog() -> dict:
         choices.sort(key=lambda item: (int(item.get("repository_priority", 100)), item.get("repository_id", ""), item.get("version", "")))
         source_repo = source.get("repository_id")
         pinned = [item for item in choices if item.get("repository_id") == source_repo] if source_repo else []
-        selected = select_release(choices, source_repo)  # 1.18.38: shared with the bulk upgrade plan
+        selected = select_release(choices, source_repo)  # 1.18.38: select_release is shared
         compatibility = _candidate_compatibility(selected, installed) if selected else None
         installed_version = current.get("extension_version") if current else None
         update_available = bool(selected and installed_version and version_satisfies(selected["version"], f">{installed_version}"))
@@ -1386,6 +1367,39 @@ def stage_repository_package(repository_id: str, module_id: str, version: str | 
     attach_source_provenance(staged["upload_id"], source)
     staged["source"] = source
     return staged
+
+
+ONLINE_BATCH_DEADLINE_SECONDS = 240
+
+
+def stage_online_batch(items, request=None) -> dict:
+    """Core 1.18.42: stage several online releases as one batch, the same way the single Upgrade stages one.
+    ``items`` is a list of ``{repository_id, module_id, version}`` (the view has validated it). Each item goes through ``stage_repository_package``
+    unchanged: the same checks, strict licence audit row, grant, SHA-256, publisher signature, identity check and pinned-repository rule, and
+    no source change. The staged packages are then written as one batch (``kind`` "batch", also for one item) that the existing batch install
+    queues as one job. Any refusal discards every package already staged and raises with the module id in front. A deadline of
+    ``ONLINE_BATCH_DEADLINE_SECONDS`` keeps one request from holding a web worker for minutes."""
+    artifacts: list = []
+    flattened: list = []
+    staged_ids: list = []
+    deadline = time.monotonic() + ONLINE_BATCH_DEADLINE_SECONDS
+    try:
+        for item in items:
+            if time.monotonic() > deadline:
+                raise ModuleRepositoryError("The batch took too long to download. Select fewer modules.")
+            module_id = item["module_id"]
+            try:
+                stage = stage_repository_package(item["repository_id"], module_id, item["version"], request=request)
+                staged_ids.append(stage["upload_id"])
+                _flatten_staged(stage, str(stage.get("filename") or f"{module_id}-{item['version']}.zip"), artifacts, flattened)
+            except (ModuleRepositoryError, ModuleManagerError, ModuleManagerV2Error) as exc:
+                raise ModuleRepositoryError(f"{module_id}: {exc}") from exc
+        return _write_batch(artifacts, flattened)
+    except Exception:
+        for upload_id in staged_ids:
+            with contextlib.suppress(Exception):
+                discard_v2_stage(upload_id)
+        raise
 
 
 def _stage_licensing_release(repo: dict, repository_id: str, module_id: str, candidate: dict, request=None, correlation_id=None) -> dict:

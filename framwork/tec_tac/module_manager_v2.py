@@ -1114,6 +1114,61 @@ def pair_intake_sidecars(uploads, signatures=None, metadata_files=None) -> list[
     return [(upload, *chosen_metadata.get(id(upload), (None, None))) for upload in uploads]
 
 
+def _flatten_staged(stage: dict, filename: str, artifacts: list, flattened: list) -> None:
+    """Core 1.18.42: the flatten step of stage_multiple_packages, shared with the online batch (module_repository.stage_online_batch).
+    Adds the staged upload to ``artifacts`` first (so a caller that fails afterwards still discards it) and its rows to ``flattened``: one row for a
+    module package, one per child for a bundle. Raises ModuleManagerV2Error for a bundle with no packages."""
+    preview = dict(stage.get("preview") or {})
+    kind = str(stage.get("kind") or preview.get("kind") or "package")
+    artifact = {**stage, "preview": preview, "kind": kind}
+    artifacts.append(artifact)
+
+    if kind == "bundle":
+        children = list(preview.get("packages") or [])
+        if not children:
+            raise ModuleManagerV2Error("Bundle contains no installable module packages.")
+        for child in children:
+            flattened.append({
+                "preview": dict(child),
+                "source_kind": "bundle",
+                "source_upload_id": stage["upload_id"],
+                "source_bundle_id": preview.get("id"),
+                "source_filename": filename,
+            })
+    else:
+        if not preview.get("id"):
+            meta = _load_stage(stage["upload_id"])
+            preview = _package_metadata(Path(meta["package_path"]))
+            artifact["preview"] = preview
+        flattened.append({
+            **stage,
+            "preview": preview,
+            "source_kind": "package",
+            "source_upload_id": stage["upload_id"],
+            "source_filename": filename,
+        })
+
+
+def _write_batch(artifacts: list, flattened: list) -> dict:
+    """Core 1.18.42: the tail of stage_multiple_packages, shared with the online batch. Resolves one dependency plan over every flattened row,
+    writes the batch file and returns the batch payload."""
+    plan = resolve_install_plan([item["preview"] for item in flattened])
+    batch_id = str(uuid.uuid4())
+    BATCHES_ROOT.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "kind": "batch",
+        "upload_id": batch_id,
+        "created_at": _utcnow(),
+        "artifacts": artifacts,
+        # packages is intentionally flattened for the UI/install-order
+        # contract. One uploaded bundle may therefore contribute many rows.
+        "packages": flattened,
+        "plan": plan,
+    }
+    _atomic_json(BATCHES_ROOT / f"{batch_id}.json", payload)
+    return payload
+
+
 def stage_multiple_packages(uploads, signatures=None, metadata_files=None) -> dict:
     uploads = list(uploads)
     if not uploads:
@@ -1137,53 +1192,11 @@ def stage_multiple_packages(uploads, signatures=None, metadata_files=None) -> di
             filename = str(getattr(upload, "name", "package"))
             try:
                 stage = stage_uploaded_artifact(upload) if sig_upload is None and meta_upload is None else                     stage_uploaded_artifact(upload, signature_upload=sig_upload, metadata_upload=meta_upload)
-                preview = dict(stage.get("preview") or {})
-                kind = str(stage.get("kind") or preview.get("kind") or "package")
-                artifact = {**stage, "preview": preview, "kind": kind}
-                artifacts.append(artifact)
-
-                if kind == "bundle":
-                    children = list(preview.get("packages") or [])
-                    if not children:
-                        raise ModuleManagerV2Error("Bundle contains no installable module packages.")
-                    for child in children:
-                        flattened.append({
-                            "preview": dict(child),
-                            "source_kind": "bundle",
-                            "source_upload_id": stage["upload_id"],
-                            "source_bundle_id": preview.get("id"),
-                            "source_filename": filename,
-                        })
-                else:
-                    if not preview.get("id"):
-                        meta = _load_stage(stage["upload_id"])
-                        preview = _package_metadata(Path(meta["package_path"]))
-                        artifact["preview"] = preview
-                    flattened.append({
-                        **stage,
-                        "preview": preview,
-                        "source_kind": "package",
-                        "source_upload_id": stage["upload_id"],
-                        "source_filename": filename,
-                    })
+                _flatten_staged(stage, filename, artifacts, flattened)
             except (ModuleManagerError, ModuleManagerV2Error) as exc:
                 raise ModuleManagerV2Error(f"{filename}: {exc}") from exc
 
-        plan = resolve_install_plan([item["preview"] for item in flattened])
-        batch_id = str(uuid.uuid4())
-        BATCHES_ROOT.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "kind": "batch",
-            "upload_id": batch_id,
-            "created_at": _utcnow(),
-            "artifacts": artifacts,
-            # packages is intentionally flattened for the UI/install-order
-            # contract. One uploaded bundle may therefore contribute many rows.
-            "packages": flattened,
-            "plan": plan,
-        }
-        _atomic_json(BATCHES_ROOT / f"{batch_id}.json", payload)
-        return payload
+        return _write_batch(artifacts, flattened)
     except Exception:
         for artifact in artifacts:
             try:

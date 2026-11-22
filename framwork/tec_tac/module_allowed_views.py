@@ -108,5 +108,5 @@ class ModuleOnlineInstallPlanView(APIView):
             purpose = module_install_plan.clean_purpose(data.get("purpose"))
         except module_install_plan.BadSelection as exc:
             return Response({"ok": False, "state": "bad_request", "message": str(exc)}, status=400)
-        body = module_install_plan.plan_online_install(selection) if purpose == "install" else module_install_plan.plan_online_install(selection, purpose=purpose)
+        body = module_install_plan.plan_online_install(selection, purpose=purpose)
         return Response(body, status=_allowed_http(body["state"]))

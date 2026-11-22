@@ -4,14 +4,16 @@ from rest_framework.views import APIView
 
 from .session_security import SessionAuthenticated
 
-from . import module_licensing
-from .module_manager_v2 import LicensingRequirementError
+from . import module_install_plan, module_install_run, module_licensing
+from .module_manager import ModuleManagerError
+from .module_manager_v2 import LicensingRequirementError, ModuleManagerV2Error
 from .module_repository import (
     SKIPPED_REASON_FOR_OTHERS,
     ModuleRepositoryError,
     all_repository_status,
     delete_repository,
     online_catalog,
+    stage_online_batch,
     stage_repository_package,
     sync_all,
     sync_repository,
@@ -166,4 +168,25 @@ class ModuleOnlineStageView(APIView):
         except ModuleRepositoryError as exc:
             # Module Manager validation errors are intentionally returned as a
             # bounded client-visible staging failure, not an unhandled 500.
+            return Response({"detail": str(exc)}, status=400)
+
+
+@extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Stage several online module releases as one batch"))
+class ModuleOnlineStageBatchView(APIView):
+    """Core 1.18.42: Upgrade selected. Stages each release exactly as the single stage route does (no licence override, no source change), then
+    answers one batch the existing v2 batch install queues as one job. Any refusal discards everything staged."""
+    permission_classes = (SessionAuthenticated,)
+
+    def post(self, request):
+        _require_module_manager(request.user)
+        data = request.data if hasattr(request.data, "get") else {}
+        if module_install_run.refused_fields(data):
+            return Response({"detail": "A batch takes no licence override and no replacement confirmation. Stage that module on its own."}, status=400)
+        try:
+            items = module_install_plan.clean_batch_items(data.get("items"))
+        except module_install_plan.BadSelection as exc:
+            return Response({"detail": str(exc)}, status=400)
+        try:
+            return Response(stage_online_batch(items, request=request), status=201)
+        except (ModuleRepositoryError, ModuleManagerError, ModuleManagerV2Error) as exc:  # includes LicensingRequirementError; everything staged is already discarded
             return Response({"detail": str(exc)}, status=400)

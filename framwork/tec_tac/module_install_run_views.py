@@ -13,7 +13,7 @@ from .views import _require_module_manager
 
 @extend_schema_view(post=extend_schema(tags=["Tec-Tac Framework"], summary="Install several licensed modules in one run"))
 class ModuleOnlineInstallRunView(APIView):
-    """Core 1.18.20 (R1b). Plans again on the server, then starts one run. The body has ``modules`` and an optional ``purpose`` ("install" or "upgrade", 1.18.35): no order, version, licence override or
+    """Core 1.18.20 (R1b). Plans again on the server, then starts one run. The body has ``modules`` and an optional ``purpose`` (only "install"; 1.18.42 removed "upgrade"): no order, version, licence override or
     replacement confirmation is accepted. The work is done by short Celery ticks (module_install_run.py)."""
     permission_classes = (SessionAuthenticated,)
 

@@ -204,8 +204,11 @@ docs = (ROOT / "docs" / "module-reporting.md").read_text(encoding="utf-8")
 for word in ("AD-76", "CQ93", "schedule_run", MESSAGE):
     must(word in docs, f"docs/module-reporting.md mentions {word}")
 must("Johan has been asked" not in docs and "open for Johan's decision" not in docs, "the open-question text is gone")
-version = (ROOT / "VERSION").read_text(encoding="utf-8").strip().split("-")[0]
-notes = (ROOT / f"RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
+# Core 1.18.42: the notes of this test's own release moved to docs/releases when 1.18.42 became the current one.
+notes_path = ROOT / "RELEASE_NOTES_1.18.41.md"
+if not notes_path.is_file():
+    notes_path = ROOT / "docs" / "releases" / "RELEASE_NOTES_1.18.41.md"
+notes = notes_path.read_text(encoding="utf-8")
 for word in ("CQ93", "AD-76", "## Module-facing change", "## Johan dev02 checklist", "schedule_run", "reportmanager", "sentinelone"):
     must(word in notes, f"release notes mention {word}")
 checklist = notes[notes.index("## Johan dev02 checklist"):notes.index("## Exit list")]

@@ -40,7 +40,7 @@ from .views import (
 )
 from .module_repository_views import (
     ModuleRepositoryListView, ModuleRepositoryDetailView, ModuleRepositorySyncView,
-    ModuleRepositorySyncAllView, ModuleOnlineCatalogView, ModuleOnlineStageView,
+    ModuleRepositorySyncAllView, ModuleOnlineCatalogView, ModuleOnlineStageView, ModuleOnlineStageBatchView,
 )
 from .module_allowed_views import ModuleAllowedCatalogView, ModuleAllowedRefreshView, ModuleAllowedSelectionView, ModuleOnlineInstallPlanView
 from .module_install_run_views import ModuleOnlineInstallProgressView, ModuleOnlineInstallRunView, ModuleOnlineInstallStopView
@@ -173,6 +173,7 @@ urlpatterns = [
     path("modules/repositories/<str:repository_id>/sync/", ModuleRepositorySyncView.as_view(), name="tec-tac-module-repository-sync"),
     path("modules/catalog/online/", ModuleOnlineCatalogView.as_view(), name="tec-tac-module-online-catalog"),
     path("modules/catalog/online/stage/", ModuleOnlineStageView.as_view(), name="tec-tac-module-online-stage"),
+    path("modules/catalog/online/stage/batch/", ModuleOnlineStageBatchView.as_view(), name="tec-tac-module-online-stage-batch"),
     path("modules/catalog/allowed/", ModuleAllowedCatalogView.as_view(), name="tec-tac-module-allowed-catalog"),
     path("modules/catalog/allowed/refresh/", ModuleAllowedRefreshView.as_view(), name="tec-tac-module-allowed-refresh"),
     path("modules/catalog/allowed/selection/", ModuleAllowedSelectionView.as_view(), name="tec-tac-module-allowed-selection"),
