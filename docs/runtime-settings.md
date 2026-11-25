@@ -1,6 +1,6 @@
 # Core Runtime Settings
 
-Core stores a small set of settings. Four today: the module `register()` time limit, which the browser shell reads at startup, (1.17.14) the Tactical operation upload limit, which Core's own executor reads, (1.17.23) the system name an authenticator app shows, and (1.17.58) the licensing enforcement mode.
+Core stores a small set of settings. Five today: the module `register()` time limit, which the browser shell reads at startup, (1.17.14) the Tactical operation upload limit, which Core's own executor reads, (1.17.23) the system name an authenticator app shows, (1.17.58) the licensing enforcement mode, and (1.18.52) how long a new Engineer Console certificate lasts.
 
 ## Module `register()` time limit
 
@@ -132,3 +132,25 @@ skips the check. Licensing never blocks sign-in, Tactical operations, module rol
 - Superuser only. A caller who holds only `core.runtime_settings.manage` gets 403, checked before the value is read, with one best-effort Core deny row (object `licensing_enforcement_mode`, no value). A body that mixes this setting with another is refused whole.
 - Each change writes its own strict audit row with the effective mode before and after, and the metadata `source_before` and `source_after` (`default` or `set`). Choosing `log-only` while the default is `log-only` pins the choice: it changes the source, so it writes a row.
 - Python: `tec_tac.module_licensing.get_licensing_enforcement_mode()` never raises. A read error or an invalid stored value reads as `log-only`.
+
+## Engineer Console certificate validity (1.18.52)
+
+```text
+console_certificate_validity_days   default 365   range 1 to 730 (whole days)
+```
+
+How many days a new Engineer Console certificate lasts. It never changes a certificate that was already issued, and a certificate never lasts past the certificate authority's end minus one day. See `docs/console-certificates.md`.
+
+`GET /api/tfd/system/runtime-settings/` gains an object, additive:
+
+```json
+"console_certificate_validity_days": { "value": 365, "minimum": 1, "maximum": 730, "default": 365 }
+```
+
+`PATCH` accepts `{"console_certificate_validity_days": 90}`:
+
+- A whole number from 1 to 730. A bool, a float, a string, a list and `null` are a 400. `null` does not reset it.
+- Superuser only. A caller who holds only `core.runtime_settings.manage` gets 403, checked before the value is read, with one best-effort Core deny row (object `console_certificate_validity_days`, no value). A body that mixes this setting with another the caller may not change is refused whole.
+- Each change writes its own strict audit row (`modify`, object `console_certificate_validity_days`, before and after). A value sent unchanged writes no row.
+- Python: `tec_tac.runtime_settings.get_console_certificate_validity_days()` never raises. A read error, or a stored value outside 1 to 730, reads as 365. Core reads it when it makes a certificate.
+- Tests: `tests/console-certificates-setting-1.18.52.py`.

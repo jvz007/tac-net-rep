@@ -3,6 +3,10 @@ from .account_self_service_views import MyAccountPasswordView, MyAccountTactical
 from .resource_views import ResourceListView, ResourceDetailView, ResourceMutableListView, ResourceMutableDetailView, ResourceCustomFieldsView, ResourceCustomFieldDefinitionsView
 from .server_backup_views import BackupRestoreView, BackupRestoreJobView
 from .sandbox_views import SandboxRunCancelView, SandboxStatusView
+from .console_certificate_views import (
+    ConsoleCertificateCaReplaceView, ConsoleCertificateCaView, ConsoleCertificateEnrolmentCancelView, ConsoleCertificateEnrolmentCodeView,
+    ConsoleCertificateEnrolView, ConsoleCertificateIssueView, ConsoleCertificateListView, ConsoleCertificateMineView, ConsoleCertificateRevokeView,
+)
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
     ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView, ServerMaintenanceJobLogView,
@@ -105,6 +109,15 @@ urlpatterns = [
     path("audit/record/", AuditRecordView.as_view(), name="tec-tac-audit-record"),
     path("tactical-operations/<str:module_id>/<str:operation_id>/", TacticalOperationView.as_view(), name="tec-tac-tactical-operations"),
     path("tactical-websocket/<str:module_id>/<str:kind>/tickets/", TacticalWebSocketTicketView.as_view(), name="tec-tac-tactical-websocket-ticket"),
+    path("console-certificates/", ConsoleCertificateListView.as_view(), name="tec-tac-console-certificates"),
+    path("console-certificates/mine/", ConsoleCertificateMineView.as_view(), name="tec-tac-console-certificates-mine"),
+    path("console-certificates/mine/enrolment-code/", ConsoleCertificateEnrolmentCodeView.as_view(), name="tec-tac-console-certificates-code"),
+    path("console-certificates/enrol/", ConsoleCertificateEnrolView.as_view(), name="tec-tac-console-certificates-enrol"),
+    path("console-certificates/issue/", ConsoleCertificateIssueView.as_view(), name="tec-tac-console-certificates-issue"),
+    path("console-certificates/enrolments/<uuid:enrolment_id>/cancel/", ConsoleCertificateEnrolmentCancelView.as_view(), name="tec-tac-console-certificates-cancel"),
+    path("console-certificates/ca/", ConsoleCertificateCaView.as_view(), name="tec-tac-console-certificates-ca"),
+    path("console-certificates/ca/replace/", ConsoleCertificateCaReplaceView.as_view(), name="tec-tac-console-certificates-ca-replace"),
+    path("console-certificates/<str:serial>/revoke/", ConsoleCertificateRevokeView.as_view(), name="tec-tac-console-certificates-revoke"),
     path("agent-downloads/<str:token>/", AgentDownloadView.as_view(), name="tec-tac-agent-download"),
     path("endpoint-agent/installer.msi", InstallerDownloadView.as_view(), name="tec-tac-endpoint-agent-installer"),
     path("capabilities/", CapabilityListView.as_view(), name="tec-tac-capabilities"),

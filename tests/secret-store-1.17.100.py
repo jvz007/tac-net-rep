@@ -551,6 +551,12 @@ for path in sorted(APP.glob("*.py")):
         # 1.17.113: the one Core file that may name the secret store, and only the private read made for it (core.server_maintenance 1.3.0)
         must("TecTacSecret" not in code and "core_secret" not in code and code.count("secret_store.") == code.count("secret_store._read_for_server_maintenance") + code.count("secret_store.SecretStoreError") and "secret_store._read_for_server_maintenance" in code, "server_maintenance.py uses more than its private read")
         continue
+    if path.name in {"console_certificates.py", "console_certificate_views.py"}:
+        # 1.18.52: the Engineer Console CA key lives in its own table under the same master key. These two files may name the secret store, and
+        # only for its private AES helpers and its error class. They never use the five contract functions or the module secret table.
+        must("TecTacSecret" not in code and "core_secret" not in code and not re.search(r"secret_store\.(put|get|delete|configured|list_names)", code),
+             f"{path.name} uses more of the secret store than the CA key needs")
+        continue
     must("secret_store" not in code and "TecTacSecret" not in code and "core_secret" not in code, f"{path.name} touches the secret store")
 for path in sorted((APP / "migrations").glob("*.py")):
     if path.name != "0044_core_secret.py":

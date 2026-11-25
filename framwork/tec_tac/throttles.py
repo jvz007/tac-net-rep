@@ -289,3 +289,27 @@ class FilterSetWriteMinThrottle(_WriteOnlyThrottle):
 class FilterSetWriteDayThrottle(_WriteOnlyThrottle):
     scope = "tec_tac_filter_set_write_day"
     rate = "2000/day"
+
+
+class ConsoleEnrolmentCodeMinThrottle(_AuthenticatedAttemptThrottle):
+    """Core 1.18.52: asking for a Console enrolment code (POST /api/tfd/console-certificates/mine/enrolment-code/)."""
+
+    scope = "tec_tac_console_enrolment_code_min"
+    rate = "5/min"
+
+
+class ConsoleEnrolmentCodeDayThrottle(_AuthenticatedAttemptThrottle):
+    scope = "tec_tac_console_enrolment_code_day"
+    rate = "20/day"
+
+
+class ConsoleCertificateWriteMinThrottle(_WriteOnlyThrottle):
+    """Core 1.18.52: changes to Console certificates (issue, cancel, revoke, replace the CA). Reads are not counted."""
+
+    scope = "tec_tac_console_certificate_write_min"
+    rate = "30/min"
+
+
+class ConsoleCertificateWriteDayThrottle(_WriteOnlyThrottle):
+    scope = "tec_tac_console_certificate_write_day"
+    rate = "500/day"

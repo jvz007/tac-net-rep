@@ -24,6 +24,11 @@ back to False with one strict audit row, once, from the scheduler tick. The colu
 it (checked before the value; a refusal writes a deny row; a body that mixes it with another setting is refused whole). JSON null resets it
 to Core's default, which is ``log-only``. The stored column is blank when no choice was made, so a later release can move the default to
 enforce with one constant. See ``module_licensing``.
+
+1.18.52 (Engineer Console certificates, C3): ``console_certificate_validity_days`` is how long a new Console certificate lasts, in whole
+days (1 to 730, default 365). Only an effective superuser changes it (checked before the value; a refusal writes a deny row; a body that
+mixes it with another setting is refused whole). JSON null is refused, not a reset. It is read when a certificate is made, so it
+changes new certificates only. See ``docs/console-certificates.md``.
 """
 from __future__ import annotations
 
@@ -58,7 +63,14 @@ _MIB = 2**20
 SETTING_SYSTEM_NAME = "system_name"
 DEFAULT_SYSTEM_NAME = "Tec-Tac"
 MAX_SYSTEM_NAME_LENGTH = 60
-RUNTIME_SETTING_NAMES = (SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE)
+SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS = "console_certificate_validity_days"
+DEFAULT_CONSOLE_CERTIFICATE_VALIDITY_DAYS = 365
+MIN_CONSOLE_CERTIFICATE_VALIDITY_DAYS = 1
+MAX_CONSOLE_CERTIFICATE_VALIDITY_DAYS = 730
+RUNTIME_SETTING_NAMES = (
+    SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE,
+    SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
+)
 # The settings whose stored value is text, not a whole number (1.17.58): the change check must not read them as an int.
 _TEXT_SETTINGS = (SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE)
 RETIRED_PRIVATE_RELAY_AUDIT_OBJECT = "priority_mail_private_relay"
@@ -83,6 +95,9 @@ SYSTEM_NAME_DENIED = "Only a Tec-Tac superuser may change the system name."
 
 # The licensing enforcement mode: superusers only (1.17.58).
 LICENSING_MODE_DENIED = "Only a Tec-Tac superuser may change the licensing enforcement mode."
+
+# The Console certificate validity: superusers only (1.18.52).
+CONSOLE_VALIDITY_DENIED = "Only a Tec-Tac superuser may change how long a Console certificate lasts."
 
 
 class RuntimeSettingsError(ValueError):
@@ -144,6 +159,27 @@ def validate_licensing_enforcement_mode(value) -> str:
     return value
 
 
+def validate_console_certificate_validity_days(value) -> int:
+    """Accept only a whole number of days from 1 to 730. bool, float, string and None are rejected (null does not reset)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeSettingsError(f"{SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS} must be a whole number of days.")
+    if value < MIN_CONSOLE_CERTIFICATE_VALIDITY_DAYS or value > MAX_CONSOLE_CERTIFICATE_VALIDITY_DAYS:
+        raise RuntimeSettingsError(
+            f"{SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS} must be between "
+            f"{MIN_CONSOLE_CERTIFICATE_VALIDITY_DAYS} and {MAX_CONSOLE_CERTIFICATE_VALIDITY_DAYS}."
+        )
+    return value
+
+
+def get_console_certificate_validity_days() -> int:
+    """How many days a new Console certificate lasts. Never raises: any failure, or a stored value outside 1 to 730, gives 365."""
+    try:
+        return validate_console_certificate_validity_days(int(TecTacRuntimeConfig.current().console_certificate_validity_days))
+    except Exception:
+        logger.debug("Could not read the Console certificate validity; using the default.", exc_info=True)
+        return DEFAULT_CONSOLE_CERTIFICATE_VALIDITY_DAYS
+
+
 def get_system_name() -> str:
     """The name an authenticator shows for this system. Never raises: any failure or invalid stored value gives ``Tec-Tac``."""
     try:
@@ -191,6 +227,7 @@ def serialize_runtime_settings(config=None) -> dict:
         SETTING_TACTICAL_UPLOAD_MAX_MIB: _serialize_upload_limit(config),
         SETTING_SYSTEM_NAME: _serialize_system_name(config),
         SETTING_LICENSING_MODE: serialize_mode(getattr(config, SETTING_LICENSING_MODE, "")),
+        SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS: _serialize_console_validity(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "updated_by": config.updated_by.username if config.updated_by else None,
     }
@@ -207,6 +244,19 @@ def _serialize_upload_limit(config) -> dict:
         "maximum": MAX_TACTICAL_UPLOAD_MAX_MIB,
         "default": DEFAULT_TACTICAL_UPLOAD_MAX_MIB,
         "bytes": value * _MIB,
+    }
+
+
+def _serialize_console_validity(config) -> dict:
+    try:
+        value = validate_console_certificate_validity_days(int(config.console_certificate_validity_days))
+    except (AttributeError, TypeError, ValueError, RuntimeSettingsError):
+        value = DEFAULT_CONSOLE_CERTIFICATE_VALIDITY_DAYS  # what get_console_certificate_validity_days uses for a value outside the range
+    return {
+        "value": value,
+        "minimum": MIN_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
+        "maximum": MAX_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
+        "default": DEFAULT_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
     }
 
 
@@ -321,6 +371,8 @@ class RuntimeSettingsView(APIView):
                 _deny_superuser_only(request, SETTING_SYSTEM_NAME, SYSTEM_NAME_DENIED)
             if SETTING_LICENSING_MODE in data:
                 _deny_superuser_only(request, SETTING_LICENSING_MODE, LICENSING_MODE_DENIED)
+            if SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS in data:
+                _deny_superuser_only(request, SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS, CONSOLE_VALIDITY_DENIED)
         changes = {}
         try:
             if SETTING_MODULE_REGISTER_TIMEOUT in data:
@@ -335,6 +387,8 @@ class RuntimeSettingsView(APIView):
                 # JSON null resets the mode to Core's default: the stored value goes blank, so the default can move later.
                 mode = data[SETTING_LICENSING_MODE]
                 changes[SETTING_LICENSING_MODE] = "" if mode is None else validate_licensing_enforcement_mode(mode)
+            if SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS in data:
+                changes[SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS] = validate_console_certificate_validity_days(data[SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS])
         except RuntimeSettingsError as exc:
             return Response({"detail": str(exc)}, status=400)
         with transaction.atomic():

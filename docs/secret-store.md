@@ -37,6 +37,10 @@ Read a secret only inside your module's server-side code, at the moment you need
 - **Key id.** Each row records which key made it, so a later key rotation can find the rows to re-encrypt. This release has one key and no rotation command.
 - **Not in a backup.** The routine server backup leaves the secrets folder out, and a restore refuses a bundle that carries it. The key beside the encrypted rows would undo the protection. Keep one offline copy of `master.key`, for example in your password manager.
 
+## The Engineer Console CA key (since 1.18.52)
+
+Core keeps one more private key under the same master key: the private key of the certificate authority that signs Engineer Console certificates (`docs/console-certificates.md`). It is not a module secret. It lives in its own table, `core_console_ca`, encrypted with the same AES-256-GCM helpers and bound to the scope `core:console-ca` and the name `ca-key:<server id>`. It is never put or read through the five contract functions, and no module can reach it. A missing or unsafe master key, or a key that cannot decrypt the row, gives `master_key_unavailable` (503) for issuing, codes and enrolling. Losing the master key means an effective superuser replaces the CA and engineers enrol again.
+
 ## Handing a secret to a root program (since 1.17.113)
 
 A module can have Core hand its own secret to its own server-maintenance action. The module lists the secret names in `secret_inputs` of the action. Core reads only those names, only for the action's owner, and only for an action a signed manifest registered. The value goes to a root-only file on tmpfs that is removed when the job ends. It never appears in the job, `argv`, the environment or the logs. Core writes one audit row for each hand-over. See `docs/server-maintenance-capability.md`, "Secret inputs". This is not a new function a module can call: `get` is still the only way to read a value, and only the owner can call it.

@@ -1659,6 +1659,90 @@ CORE_CONTRACTS = (
 )
 
 HTTP_CONTRACT_DETAILS = {
+    "/api/tfd/console-certificates/mine/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session; any signed-in person (own data only)",
+            "response": "{certificates: [row], enrolment: {id, engineer_id, username, authorised_by, authorised_by_username, authorised_at, expires_at, state, code_active} or null, host: this server's host name as the Console link uses it (null when it cannot be used), server_id: the CA's id (32 hex characters) or null before the first issue, validity_days}. A certificate row is {serial, short_serial, pc_label, username, engineer_id, issued_at, not_after, state (active, expired or revoked), expiring (active and 30 days or less left), revoked_at, revoked_reason, last_used_at}. last_used_at stays null until Core 1.18.53.",
+            "errors": {"401": "not signed in"},
+            "notes": ["Added in 1.18.52 (framework >=1.18.52). Core-internal: a module has no use for this route. No key material is ever in an answer."],
+        },
+    },
+    "/api/tfd/console-certificates/mine/enrolment-code/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session; the person's own open, unexpired enrolment only",
+            "request": "no body",
+            "response": "{code, code_expires_at, expires_in_seconds: 600, host, server_id, enrolment_id}. Cache-Control: no-store. The code is shown once and Core keeps only its SHA-256. A new code voids the old one.",
+            "errors": {"400": "host_unusable (other ports and odd host names)", "409": "enrolment_required: Ask your administrator to issue you a Console certificate.", "429": "5 a minute or 20 a day per person and address", "503": "master_key_unavailable"},
+            "audit": "custom:console-cert-enrol-code (not strict; never the code).",
+            "notes": ["Added in 1.18.52. The browser must not keep the code in storage."],
+        },
+    },
+    "/api/tfd/console-certificates/enrol/": {
+        "POST": {
+            "authorization": "none (no sign-in, no cookie, so no CSRF). The credential is the one-time code in the header Authorization: Enrol <43 characters of A-Z a-z 0-9 _ ->. https only: a request the proxy reports as http is refused 403.",
+            "request": "JSON of at most 4 KiB with exactly {v: 1, public_key: base64url (no padding) of the P-256 public key as SPKI DER, pc_label: 1 to 64 characters, proof: base64url (no padding) of 64 bytes r||s (IEEE P1363) ECDSA P-256 / SHA-256 over the bytes 'tectac-console-enrol-v1\\nhost=<host>\\ncode=<sha256 of the code, lower-case hex>\\nkey=<sha256 of the SPKI DER, lower-case hex>' (no trailing newline; host is Core's host, lower case, without a port)}. Unknown keys are refused.",
+            "response": "201 {v: 1, host, server_id, ca_public_key, ca_cert, cert, serial, not_after, engineer: {id, username}}. ca_public_key, ca_cert and cert are base64url (no padding) DER. Cache-Control: no-store.",
+            "errors": {"400": "invalid_request, key_invalid, proof_invalid, host_unusable", "401": "code_invalid (one body for an unknown, used, expired or badly shaped code)", "403": "account_inactive, tls_required", "409": "certificate_limit (3 active certificates)", "413": "body_too_large", "429": "10 failed attempts a minute from one address (an IPv6 address counts by its /64); Retry-After", "503": "ca_unavailable, ca_expired, master_key_unavailable, audit_failed"},
+            "audit": "custom:console-cert-issued (strict, with the revoked-as-replaced rows of an older certificate for the same PC); custom:console-cert-enrol-refused (not strict, at most one per address per minute; never the code, key or proof).",
+            "notes": ["Added in 1.18.52. The code works once: any later refusal burns the code but leaves the 7-day enrolment open for a new code. In C3 a certificate protects nothing yet: tunnels check it from Core 1.18.53."],
+        },
+    },
+    "/api/tfd/console-certificates/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session. A holder of core.console_certificates.view or .manage (or an effective superuser) sees every row; anyone else sees only their own rows (another engineer's id gives an empty page)",
+            "query": {"engineer": "optional user id", "state": "optional active | expired | revoked", "page": "optional, from 1", "page_size": "optional, default 50, at most 100"},
+            "response": "{count, page, page_size, results: [certificate row as in mine/], enrolments: [open, unexpired enrolments, at most 200; own only for a person without view]}",
+            "errors": {"400": "invalid_request"},
+            "notes": ["Added in 1.18.52."],
+        },
+    },
+    "/api/tfd/console-certificates/issue/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.console_certificates.manage (an effective superuser passes)",
+            "request": "{user_id: whole number}",
+            "response": "201 {id, engineer_id, username, authorised_at, expires_at}. The administrator never sees a code. One open enrolment per engineer, valid 7 days; issuing again cancels the earlier one. The first issue creates the certificate authority.",
+            "errors": {"400": "invalid_request, unknown_field", "403": "no core.console_certificates.manage (one deny row)", "404": "user_not_found", "409": "account_inactive (inactive, blocked or installer account), enrolment_conflict", "503": "master_key_unavailable, audit_failed"},
+            "audit": "custom:console-cert-issue-authorised (strict); custom:console-ca-created (strict, first issue only).",
+            "notes": ["Added in 1.18.52."],
+        },
+    },
+    "/api/tfd/console-certificates/enrolments/<uuid:enrolment_id>/cancel/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session with core.console_certificates.manage (an effective superuser passes)",
+            "response": "{id, engineer_id, state: cancelled}",
+            "errors": {"403": "no core.console_certificates.manage (one deny row)", "404": "enrolment_not_found", "409": "enrolment_not_open", "503": "audit_failed"},
+            "audit": "custom:console-cert-enrolment-cancelled (strict).",
+            "notes": ["Added in 1.18.52."],
+        },
+    },
+    "/api/tfd/console-certificates/<str:serial>/revoke/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session. core.console_certificates.manage (or an effective superuser) may revoke any certificate; any other person may revoke only their own",
+            "request": "{reason: lost | left | admin | other}",
+            "response": "{serial, state, revoked_reason, changed}. Revoking a certificate that is already revoked answers 200 with changed false and writes no new row.",
+            "errors": {"400": "invalid_request (the serial must be 32 lower-case hexadecimal characters)", "403": "someone else's certificate without manage (one deny row, the same answer for an unknown serial)", "404": "certificate_not_found (for a manager)", "503": "audit_failed"},
+            "audit": "custom:console-cert-revoked (strict).",
+            "notes": ["Added in 1.18.52. In C3 a revoke changes the database only. A tunnel that is open or opening is not stopped until Core 1.18.53."],
+        },
+    },
+    "/api/tfd/console-certificates/ca/": {
+        "GET": {
+            "authorization": "authenticated Tec-Tac session with core.console_certificates.view or .manage (an effective superuser passes)",
+            "response": "{exists, server_id, not_before, not_after, expires_in_days, expiring (365 days or less), active_certificates, retired_cas, master_key_available}. Never key material.",
+            "errors": {"403": "no permission (one deny row)"},
+            "notes": ["Added in 1.18.52."],
+        },
+    },
+    "/api/tfd/console-certificates/ca/replace/": {
+        "POST": {
+            "authorization": "authenticated Tec-Tac session; an effective superuser only",
+            "request": "{confirm: true}",
+            "response": "{server_id, old_server_id, not_after, revoked_certificates, cancelled_enrolments}. The old authority is retired (kept), every active certificate of it is revoked (reason ca_replaced), every open enrolment is cancelled and its code voided.",
+            "errors": {"400": "confirmation_required", "403": "not an effective superuser (one deny row)", "409": "ca_not_created", "503": "master_key_unavailable, audit_failed"},
+            "audit": "custom:console-ca-replaced (strict, with the counts).",
+            "notes": ["Added in 1.18.52. In C3 a tunnel that is open or opening is not stopped; that comes with Core 1.18.53."],
+        },
+    },
     "/api/tfd/audit/record/": {
         "POST": {
             "deprecated": (
@@ -2144,6 +2228,7 @@ HTTP_CONTRACT_DETAILS = {
                 "module_register_timeout_seconds": "object: value, minimum, maximum, default (seconds)",
                 "tactical_operation_upload_max_mib": "object: value, minimum, maximum, default, bytes. Added 1.17.14 (CQ40): the largest file one Tactical operation may forward, in whole MiB (1 to 25, default 10). Existing installs read 10",
                 "system_name": "object: value, maximum_length, default. Added 1.17.23: the name an authenticator app shows for this system (1 to 60 characters, default Tec-Tac). Existing installs read Tec-Tac. Additive",
+                "console_certificate_validity_days": "object: value, minimum (1), maximum (730), default (365). Added 1.18.52: how many days a new Engineer Console certificate lasts. Existing installs read 365. Additive",
                 "updated_at": "ISO time of the last change",
                 "updated_by": "username of the last editor, or null",
             },
@@ -2155,6 +2240,7 @@ HTTP_CONTRACT_DETAILS = {
                 "tactical_operation_upload_max_mib": "whole number of MiB from 1 to 25 (added 1.17.14, CQ40). Same strictness as the timeout. Superuser only: a caller who holds core.runtime_settings.manage but is not an effective superuser gets 403 for this key, checked before the value",
                 "licensing_enforcement_mode": "text (added 1.17.58): off, log-only or enforce, exactly (lowercase). Anything else, a bool, a number, an empty text or another case is a 400. JSON null resets it to Core's default (log-only; the stored value goes blank, so a later release can move the default without a data migration). Superuser only: a caller who holds core.runtime_settings.manage but is not an effective superuser gets 403, checked before the value, with one best-effort Core deny row (object_id licensing_enforcement_mode, no value), and a body that mixes it with another setting is refused whole. Each change writes its own strict audit row (object_id licensing_enforcement_mode, before and after the effective mode, metadata source_before and source_after: default or set)",
                 "system_name": "text (added 1.17.23): the name an authenticator app shows for this system. 1 to 60 characters, trimmed and NFC-normalised. A boolean, number, list, empty text, a control or invisible character or a colon is refused with 400 (a colon is never altered or stored). JSON null resets it to Tec-Tac. Superuser only since 1.17.24 (before, core.runtime_settings.manage was enough): a caller who is not an effective superuser gets 403 for this key, checked before the value, and a body that mixes it with another setting is refused whole. A refusal writes one best-effort Core deny row (object_id system_name, no value). Each change writes its own strict audit row (object_id system_name, before and after the name)",
+                "console_certificate_validity_days": "whole number of days from 1 to 730 (added 1.18.52): how long a new Console certificate lasts; it never changes a certificate already issued. A boolean, float, string or null is refused with 400 (null does not reset). Superuser only: a caller who holds core.runtime_settings.manage but is not an effective superuser gets 403, checked before the value, with one deny row. A body that mixes it with a setting the caller may not change is refused whole",
             },
             "notes": [
                 "Writes a strict Core audit row (module_id core, object_type runtime_settings, action modify) with the before and after value, in the same transaction. A failed audit write rolls the change back. Since 1.17.14 each changed setting writes its own row, with object_id the setting name. A setting sent with its current value writes no row.",
@@ -3469,6 +3555,7 @@ RULES = (
     "UI modules must use the documented browser contracts passed to register(context) or registerPublic(context); do not import Core UI internals or read Tactical authentication storage.",
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core, server, premium or test (premium and test since 1.17.13); groups are named Core module · <name>, Server module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
     "Filter sets and value pickers belong to Core's filter-sets service (core.filter_sets 1.1.0, tec_tac.filter_sets, /api/tfd/filter-sets/ and /api/tfd/filter-values/, framework >=1.17.50; date and number fields need >=1.17.52). A module that offers filters registers '<module id>.filter_fields' 1.0.0 (describe_fields and distinct_values), lists it in its manifest capabilities when it is a core or server module, and filters distinct values at the source inside context.scope. It keeps no filter vocabulary of its own for new filters, evaluates a set only with build_q or matches on its own declared fields, and never takes field names, lookups, SQL or regular expressions from the browser. Core publishes no Python function that calls a provider for another module. The saved view key prefix 'fs-' is reserved for filter sets.",
+    "Engineer Console certificates (Core 1.18.52, C3) are Core-internal: Core signs an engineer's Console key with its own certificate authority, and the routes under /api/tfd/console-certificates/ are for the browser shell and the Engineer Console only. A module has no use for them, there is no Python contract and no capability, and a module never reads, stores or asks for a Console certificate, a code or a key. Until Core 1.18.53 no tunnel checks a certificate.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
     "Feature modules must consume Tactical clients/sites/agents through tec_tac.resources; direct Tactical resource-model imports are a Core-only compatibility boundary.",
     "Resolve cross-module business operations through the capability registry and re-check runtime availability at execution time.",

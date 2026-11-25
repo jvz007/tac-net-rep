@@ -388,6 +388,8 @@ SERVER_PROVENANCE_ENDPOINT_TRANSPORT = "endpoint-transport"
 SERVER_PROVENANCE_PROBE_TRANSPORT = "probe-transport"
 # 1.18.37: provenance of the rows Core writes for an agent file download (tec_tac.agent_downloads). Core-only.
 SERVER_PROVENANCE_AGENT_DOWNLOADS = "agent-downloads"
+# 1.18.52: provenance of the rows Core writes for the Engineer Console certificates (tec_tac.console_certificates). Core-only.
+SERVER_PROVENANCE_CONSOLE_CERTIFICATES = "console-certificates"
 # Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
 _TACTICAL_OPERATION_AUTHORITY = object()
 
@@ -915,6 +917,35 @@ def _record_probe_transport(
     return _record_row(
         actor=service_audit_actor(module_id="core", service="probe-transport"), module_id="core", action=action, object_type="probe",
         object_id=probe_id, message=message, metadata=metadata, strict=False, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
+    )
+
+
+def _record_console_certificates(
+    *,
+    actor,
+    action: str,
+    object_type: str,
+    object_id: Any = None,
+    message: Any = None,
+    metadata: dict | None = None,
+    strict: bool = False,
+    refusal: bool = False,
+) -> dict[str, Any]:
+    """Write a row for the Engineer Console certificates (1.18.52). Private: only Core's own console_certificates files call it.
+
+    The module is core. ``object_type`` is console_certificate or console_ca. ``actor`` is the signed-in person for an action they took, or
+    the console-certificates service actor for the enrol route (the engineer's id and username then go in the metadata). ``strict`` raises
+    AuditWriteError when the row cannot be written: the caller makes the change in the same transaction, so no row means no change. The row
+    carries operation_context.server_provenance = console-certificates; ``refusal`` adds core_refusal = true. Callers pass only the fields
+    listed in docs/console-certificates.md: a serial, a key fingerprint, a label, a date, ids, a reason, counts and the address. Never a
+    code, a ticket, a key, a signature, a proof or a header value, and never the CA private key.
+    """
+    context = {"server_provenance": SERVER_PROVENANCE_CONSOLE_CERTIFICATES}
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=actor, module_id="core", action=action, object_type=object_type, object_id=object_id, message=message, metadata=metadata,
+        strict=strict, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
     )
 
 

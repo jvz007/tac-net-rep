@@ -210,6 +210,8 @@ class TecTacRuntimeConfig(models.Model):
     # Remembered update source per component (1.17.2): {"framework": {"type": "branch", "ref": "dev"}, ...}.
     # A missing or invalid entry reads as the default (release, ref null); see runtime_settings.
     update_sources = models.JSONField(default=dict, blank=True)
+    # How many days a new Engineer Console certificate lasts (1.18.52). Core accepts 1 to 730; an unreadable value reads as 365.
+    console_certificate_validity_days = models.PositiveIntegerField(default=365)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_runtime_config_updates")
 
@@ -881,3 +883,108 @@ class TecTacResultCheckItem(models.Model):
 
     def __str__(self):
         return f"{self.endpoint_id}:{self.state}"
+
+
+class TecTacConsoleCA(models.Model):
+    """The certificate authority (CA) that signs Engineer Console certificates (Core 1.18.52, C3). One row is active; replaced ones stay, retired.
+
+    The private key is kept only encrypted (AES-256-GCM under the secret store's master key) in ``key_blob``. See docs/console-certificates.md.
+    """
+
+    class State(models.TextChoices):
+        ACTIVE = "active", "Active"
+        RETIRED = "retired", "Retired"
+
+    server_id = models.CharField(max_length=32, unique=True)
+    public_key_der = models.BinaryField()
+    cert_der = models.BinaryField()
+    key_blob = models.BinaryField()
+    key_id = models.CharField(max_length=32)
+    not_before = models.DateTimeField()
+    not_after = models.DateTimeField()
+    state = models.CharField(max_length=8, choices=State.choices, default=State.ACTIVE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.IntegerField(null=True, blank=True)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    retired_by = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = "core_console_ca"
+        constraints = [
+            models.UniqueConstraint(fields=("state",), condition=Q(state="active"), name="tectac_console_ca_one_active"),
+        ]
+
+    def __str__(self):
+        return f"{self.server_id}:{self.state}"
+
+
+class TecTacConsoleCertificate(models.Model):
+    """One Engineer Console certificate. The row is the authority; the CA signature is the second lock (no CRL, no OCSP).
+
+    ``user_id`` is a plain integer with no foreign key, so removing a user never removes the audit trail of the certificates they held.
+    """
+
+    class State(models.TextChoices):
+        ACTIVE = "active", "Active"
+        REVOKED = "revoked", "Revoked"
+
+    serial = models.CharField(max_length=32, unique=True)
+    ca = models.ForeignKey(TecTacConsoleCA, on_delete=models.PROTECT, related_name="+")
+    user_id = models.IntegerField()
+    username_snapshot = models.CharField(max_length=150)
+    pc_label = models.CharField(max_length=64)
+    spki_sha256 = models.CharField(max_length=64)
+    cert_der = models.BinaryField()
+    not_before = models.DateTimeField()
+    not_after = models.DateTimeField()
+    state = models.CharField(max_length=8, choices=State.choices, default=State.ACTIVE)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.IntegerField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=16, blank=True, default="")
+    last_used_at = models.DateTimeField(null=True, blank=True)  # stays empty until Core 1.18.53 (C4) checks certificates on a tunnel
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "core_console_certificate"
+        indexes = [
+            models.Index(fields=("user_id", "state"), name="tectac_concert_user_idx"),
+            models.Index(fields=("ca", "state"), name="tectac_concert_ca_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.serial}:{self.state}"
+
+
+class TecTacConsoleEnrolment(models.Model):
+    """An administrator's permission for one engineer to enrol a Console PC. Valid 7 days; the one-time code lives 10 minutes inside it.
+
+    Only the SHA-256 of a code is stored, and it is cleared the moment the code is used or burnt.
+    """
+
+    class State(models.TextChoices):
+        OPEN = "open", "Open"
+        USED = "used", "Used"
+        CANCELLED = "cancelled", "Cancelled"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.IntegerField()
+    authorised_by = models.IntegerField()
+    authorised_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    state = models.CharField(max_length=9, choices=State.choices, default=State.OPEN)
+    code_hash = models.CharField(max_length=64, blank=True, default="")
+    code_expires_at = models.DateTimeField(null=True, blank=True)
+    used_serial = models.CharField(max_length=32, blank=True, default="")
+
+    class Meta:
+        db_table = "core_console_enrolment"
+        constraints = [
+            models.UniqueConstraint(fields=("user_id",), condition=Q(state="open"), name="tectac_console_enrol_one_open"),
+        ]
+        indexes = [
+            models.Index(fields=("code_hash",), name="tectac_console_enrol_code_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.id}:{self.state}"

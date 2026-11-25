@@ -15,12 +15,15 @@ CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION = "core.resources.clients.manage"
 CORE_RESOURCES_SITES_MANAGE_PERMISSION = "core.resources.sites.manage"
 CORE_SANDBOX_VIEW_PERMISSION = "core.sandbox.view"  # 1.17.118: read the sandbox status route
 CORE_SANDBOX_MANAGE_PERMISSION = "core.sandbox.manage"  # 1.17.118: cancel a sandbox run by id
+CORE_CONSOLE_CERTIFICATES_VIEW_PERMISSION = "core.console_certificates.view"  # 1.18.52: see every Engineer Console certificate and the CA status
+CORE_CONSOLE_CERTIFICATES_MANAGE_PERMISSION = "core.console_certificates.manage"  # 1.18.52: allow an engineer to enrol, cancel, revoke
 CORE_PERMISSION_GROUPS = {
     "Privileged operations": (CORE_PRIVILEGED_PERMISSION,),
     "Runtime settings": (CORE_RUNTIME_SETTINGS_MANAGE_PERMISSION,),
     "Client resource management": (CORE_RESOURCES_CLIENTS_MANAGE_PERMISSION,),
     "Site resource management": (CORE_RESOURCES_SITES_MANAGE_PERMISSION,),
     "Sandbox": (CORE_SANDBOX_VIEW_PERMISSION, CORE_SANDBOX_MANAGE_PERMISSION),
+    "Console certificates": (CORE_CONSOLE_CERTIFICATES_VIEW_PERMISSION, CORE_CONSOLE_CERTIFICATES_MANAGE_PERMISSION),
 }
 
 
@@ -179,6 +182,16 @@ def can_view_sandbox(user) -> bool:
 def can_manage_sandbox(user) -> bool:
     """May this user cancel a sandbox run by id (1.17.118)? core.sandbox.manage, or a superuser."""
     return _has_core_permission(user, CORE_SANDBOX_MANAGE_PERMISSION)
+
+
+def can_manage_console_certificates(user) -> bool:
+    """May this user allow an engineer to enrol a Console, cancel an enrolment or revoke any certificate (1.18.52)? manage, or a superuser."""
+    return _has_core_permission(user, CORE_CONSOLE_CERTIFICATES_MANAGE_PERMISSION)
+
+
+def can_view_console_certificates(user) -> bool:
+    """May this user see every Console certificate and the CA status (1.18.52)? view, manage or a superuser. Fails closed."""
+    return _has_core_permission(user, CORE_CONSOLE_CERTIFICATES_VIEW_PERMISSION) or _has_core_permission(user, CORE_CONSOLE_CERTIFICATES_MANAGE_PERMISSION)
 
 
 
