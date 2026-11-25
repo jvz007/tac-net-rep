@@ -281,8 +281,11 @@ stub("channels.generic.websocket", AsyncWebsocketConsumer=FakeBase)
 stub("channels.layers", get_channel_layer=lambda: LAYER if LAYER_ENABLED[0] else None)
 stub("celery", current_app=CELERY)
 DB = {"old": 0, "closed": 0}
+# 1.18.50: django.db.transaction as access_events reads it: an atomic block is open or not, and on_commit runs a callback when it commits
+TXN = SimpleNamespace(in_atomic_block=False, pending=[])
 stub("django.db", close_old_connections=lambda: DB.__setitem__("old", DB["old"] + 1),
-     connections=SimpleNamespace(close_all=lambda: DB.__setitem__("closed", DB["closed"] + 1)))
+     connections=SimpleNamespace(close_all=lambda: DB.__setitem__("closed", DB["closed"] + 1)),
+     transaction=SimpleNamespace(get_connection=lambda: TXN, on_commit=lambda func: TXN.pending.append(func)))
 stub("django.core.cache", cache=CACHE)
 
 # 1.18.47: the sign-in, the permission and the user model behind a tunnel ticket (stubs; the real ones need Django)
@@ -306,6 +309,55 @@ class _Users:
         return SimpleNamespace(first=lambda: USERS.get(pk))
 
 
+# 1.18.50: tec_tac.resources.get_site, the question the owner asks at open and Core asks again for a live session
+class ResourceNotFound(Exception):
+    pass
+
+
+class ResourcePermissionDenied(Exception):
+    pass
+
+
+SITES = {"visible": {}, "mode": "normal", "calls": []}  # visible: user pk -> set of site ids; mode: normal | fault | denied
+
+
+def _get_site(site_id, *, context):
+    SITES["calls"].append((getattr(context.user, "pk", None), site_id))
+    if SITES["mode"] == "fault":
+        raise RuntimeError("database down")
+    if SITES["mode"] == "denied":
+        raise ResourcePermissionDenied("no")
+    if site_id not in SITES["visible"].get(context.user.pk, ()):
+        raise ResourceNotFound("no")
+    return {"id": site_id}
+
+
+stub("tec_tac.resources", get_site=_get_site, user_context=lambda user: SimpleNamespace(user=user), ResourceNotFound=ResourceNotFound,
+     ResourcePermissionDenied=ResourcePermissionDenied)
+
+
+class FakeSignal:
+    """django.dispatch.Signal reduced to connect and send_robust (a receiver that raises is returned, never raised)."""
+
+    def __init__(self):
+        self.receivers = []
+        self.sent = []
+
+    def connect(self, receiver, **kw):
+        self.receivers.append(receiver)
+
+    def send_robust(self, sender, **named):
+        self.sent.append(named)
+        out = []
+        for receiver in self.receivers:
+            try:
+                out.append((receiver, receiver(signal=self, sender=sender, **named)))
+            except Exception as error:
+                out.append((receiver, error))
+        return out
+
+
+stub("django.dispatch", Signal=FakeSignal)
 stub("tec_tac.tactical_websocket", session_refusal=_session_refusal)
 stub("tec_tac.rbac", has_extension_permission=_has_permission)
 stub("tec_tac.session_security", request_knox_digest=lambda request: getattr(request, "digest", ""))
@@ -323,6 +375,8 @@ consumer_module = importlib.import_module("tec_tac.probe_transport_consumer")
 tun = importlib.import_module("tec_tac.probe_tunnel")
 tun.time = SimpleNamespace(time=lambda: WALL[0], sleep=lambda seconds: None)
 tun_consumer = importlib.import_module("tec_tac.probe_tunnel_consumer")
+ae = importlib.import_module("tec_tac.access_events")
+ae.time = SimpleNamespace(time=lambda: WALL[0])
 
 
 def reset():
@@ -358,6 +412,11 @@ def reset():
     PERMS.update(granted=True, calls=[])
     USERS.clear()
     USERS[ENGINEER] = SimpleNamespace(pk=ENGINEER, is_active=True)
+    SITES.update(visible={ENGINEER: {7}}, mode="normal", calls=[])  # the engineer sees site 7, the site add_probe gives the probe
+    TXN.in_atomic_block = False
+    TXN.pending.clear()
+    ae.access_changed.receivers.clear()
+    ae.access_changed.sent.clear()
 
 
 def set_owner():

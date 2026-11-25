@@ -1,5 +1,5 @@
 """Core's Network Probe tunnel (Core 1.18.47, C2 of the probe channel plan): the Console ticket, the session limits, the two data routes' shared
-state and the end of a session. Part of the contract core.probe_transport 1.1.0.
+state and the end of a session. Part of the contract core.probe_transport (1.1.0 since Core 1.18.47, 1.2.0 since Core 1.18.50).
 
 An engineer's Console (a native desktop tool) and a Network Probe each open one binary websocket to Core. Core relays the frames between the
 two and nothing else: it reads byte 0 (the type) and the length, counts DATA bytes and never looks at stream ids, windows or payloads. It never
@@ -88,7 +88,9 @@ RECHECK_JITTER_SECONDS = 30
 RECHECK_RETRY_SECONDS = 30
 RECHECK_GRACE_SECONDS = 300
 SEND_TIMEOUT_SECONDS = 5.0
-FRAMES_PER_SECOND_MAX = 2000  # 1.18.49: frames one tunnel socket may send in a one-second window; the next ends the session protocol_error
+FRAMES_PER_SECOND_MAX = 2000  # 1.18.49: control frames (OPEN, ACK, CLOSE) one tunnel socket may send in a one-second window; the next ends the session protocol_error
+DATA_FRAMES_PER_SECOND_MAX = 10000  # 1.18.50: DATA frames in the same window, counted apart so a fast copy is not ended by its own ACKs (100 Mbit/s of 1.5 KB frames)
+RATE_CONTROL, RATE_DATA = "rate_control", "rate_data"  # the end row's detail says which bound a protocol_error was
 BACKSTOP_IDLE_GRACE_SECONDS = 30  # 1.18.49: the probe socket's own idle timer is the Console's idle limit plus this
 
 CLOSE_PROTOCOL = 1002
@@ -119,6 +121,7 @@ REFUSAL_MESSAGES = {
     "sessions_per_probe": "this probe already holds the most tunnel sessions it may",
     "sessions_per_engineer": "this person already holds the most tunnel sessions they may",
     "session_exists": "a ticket was already issued for this session id",
+    "out_of_scope": "the person has no access to the probe's site",
     "unavailable": "Core cannot issue a tunnel ticket right now; nothing was started",
     "bad_host": "the request host cannot be used in a launch link",
 }
@@ -296,7 +299,7 @@ def extend_slot(session_id: str, seconds: float) -> None:
 # ------------------------------------------------------------------------------------------------ spec and refusals
 def _clean_spec(spec):
     """A cleaned dict, or None when the spec is not valid."""
-    if not isinstance(spec, dict) or set(spec) - {"session_id", "probe_id", "permission", "target_label", "idle_s", "cap_s"}:
+    if not isinstance(spec, dict) or set(spec) - {"session_id", "probe_id", "permission", "target_label", "idle_s", "cap_s", "site_id"}:
         return None
     session_id = _clean_session_id(spec.get("session_id"))
     probe_id = spec.get("probe_id")
@@ -305,6 +308,9 @@ def _clean_spec(spec):
         return None
     if not isinstance(permission, str) or not PERMISSION_PATTERN.fullmatch(permission):
         return None
+    site_id = spec.get("site_id")  # 1.18.50: optional; absent means no scope check by Core (see scope_refusal)
+    if site_id is not None and (isinstance(site_id, bool) or not isinstance(site_id, int) or site_id <= 0):
+        return None
     numbers = {}
     for name, default, low, high in (("idle_s", IDLE_SECONDS_DEFAULT, IDLE_SECONDS_MIN, IDLE_SECONDS_MAX),
                                      ("cap_s", CAP_SECONDS_DEFAULT, CAP_SECONDS_MIN, CAP_SECONDS_MAX)):
@@ -312,7 +318,7 @@ def _clean_spec(spec):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             return None
         numbers[name] = value
-    return {"session_id": session_id, "probe_id": probe_id, "permission": permission, "target_label": pt.clean_label(spec.get("target_label")), **numbers}
+    return {"session_id": session_id, "probe_id": probe_id, "permission": permission, "target_label": pt.clean_label(spec.get("target_label")), "site_id": site_id, **numbers}
 
 
 def _audit(action: str, probe_id=None, **kwargs) -> None:
@@ -339,6 +345,63 @@ def _launch_url(request, ticket: str) -> str | None:
     if not HOST_PATTERN.fullmatch(host):
         return None
     return f"{LAUNCH_SCHEME}://open?host={quote(host, safe='')}&ticket={quote(ticket, safe='')}"
+
+
+# ------------------------------------------------------------------------------------------------ the person's scope (1.18.50)
+def scope_refusal(user_id, site_id) -> str | None:
+    """Why the person may no longer reach the probe's site, or None. Sync (database). No site id (an owner that predates 1.2.0) means no
+    check. The person is read fresh and asked the same question the owner asks at open: may this person see this site (Tactical's client and
+    site scope and can_list_sites, through tec_tac.resources.get_site). Not found or not permitted is scope_lost. Any other fault is
+    check_failed: the caller treats it as a refusal (fail closed) and the re-check retries."""
+    if site_id is None:
+        return None
+    try:
+        from django.contrib.auth import get_user_model
+
+        from . import resources
+
+        user = get_user_model().objects.filter(pk=user_id).first()
+        if user is None:
+            return "scope_lost"
+        try:
+            resources.get_site(site_id, context=resources.user_context(user))
+        except (resources.ResourceNotFound, resources.ResourcePermissionDenied):
+            return "scope_lost"
+    except Exception:
+        logger.warning("The tunnel scope check failed; refusing.", exc_info=True)
+        return "check_failed"
+    return None
+
+
+def access_changed_at(user_id):
+    """The time of the newest access change for one person (core.access_events), or None. Cache only; any fault is None."""
+    try:
+        from . import access_events
+
+        return access_events.changed_at(user_id)
+    except Exception:
+        logger.debug("The access marker could not be read.", exc_info=True)
+        return None
+
+
+def update_site(module_id: str, probe_id: str, site_id: int) -> list[str]:
+    """The owner moved a probe to another site (set_tunnel_site): for every live session of that probe that the module opened, write the new
+    site into the session record and mark the opener's access marker, so each Console re-checks within one 5-second tick. Returns the ids
+    changed. An ended session is skipped."""
+    from . import access_events
+
+    updated = []
+    for session_id, entry in read_index().items():
+        if entry.get("probe_id") != probe_id:
+            continue
+        record = get_record(session_id)
+        if record is None or record.get("module_id") != module_id or get_end(session_id):
+            continue
+        _cache().set(session_key(session_id), {**record, "site_id": site_id}, _keep_seconds())
+        if isinstance(record.get("user_id"), int):
+            access_events.mark_changed([record["user_id"]])
+        updated.append(session_id)
+    return updated
 
 
 # ------------------------------------------------------------------------------------------------ issue
@@ -372,6 +435,11 @@ def issue_ticket(request, caller: str, spec) -> dict:
         return _refusal("unavailable", "unavailable", user=user, probe_id=probe_id, session_id=sid)
     if not allowed:
         return _refusal("denied", "permission_missing", user=user, probe_id=probe_id, session_id=sid)
+    scope = scope_refusal(user.pk, clean["site_id"])
+    if scope == "scope_lost":
+        return _refusal("denied", "out_of_scope", user=user, probe_id=probe_id, session_id=sid)
+    if scope:
+        return _refusal("unavailable", "unavailable", user=user, probe_id=probe_id, session_id=sid)
     try:
         online = pt._connected(probe_id)
     except Exception:
@@ -393,7 +461,7 @@ def issue_ticket(request, caller: str, spec) -> dict:
     now = time.time()
     record = {
         "session_id": sid, "probe_id": probe_id, "user_id": user.pk, "module_id": caller, "permission": clean["permission"],
-        "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "target": clean["target_label"], "created": now,
+        "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "target": clean["target_label"], "created": now, "site_id": clean["site_id"],
     }
     value = {
         "user_id": user.pk, "trust_id": str(getattr(session, "id", "")), "knox_digest": digest, "session_id": sid, "probe_id": probe_id,
@@ -503,6 +571,9 @@ def console_open(ticket: str):
     record = get_record(value["session_id"])
     if record is None or record.get("probe_id") != value.get("probe_id") or record.get("user_id") != value.get("user_id") or get_end(value["session_id"]):
         return "not_pending", value, None, "session_not_pending"
+    scope = scope_refusal(value["user_id"], record.get("site_id"))  # 1.18.50: the site the owner named; the person may have lost it since the ticket
+    if scope:
+        return "unauthorized", value, None, scope
     if not _attach(value["session_id"], "console"):
         return "attached", value, record, "console_already_attached"
     extend_slot(value["session_id"], record["cap_s"] + SLOT_GRACE_SECONDS)
@@ -511,8 +582,13 @@ def console_open(ticket: str):
 
 def console_recheck(value: dict, record: dict, activity_at=None) -> str | None:
     """The Console's 5-minute re-check, sync (the recheck pool): the account and permission and module (account_refusal, with the last
-    DATA time as activity), then that the probe still has presence or a data socket. Returns the reason it fails, or None."""
+    DATA time as activity), then the person's access to the session's site (scope_refusal, from the live record, 1.18.50), then that the
+    probe still has presence or a data socket. Returns the reason it fails, or None. Also run at once when the person's access marker moves."""
     reason = account_refusal(value, record["permission"], activity_at)
+    if reason:
+        return reason
+    live = get_record(record["session_id"]) or record  # the live record: the owner may have moved the probe to another site since connect
+    reason = scope_refusal(value["user_id"], live.get("site_id"))
     if reason:
         return reason
     try:
@@ -567,9 +643,12 @@ def probe_open(probe_id: str, session_id: str):
 def poll_session(session_id: str) -> dict:
     """What a watcher asks every few seconds: {ended: marker or None, console: bool, probe: bool, ready: bool}. Cache only. probe is the
     attach marker (the 4409 guard); ready means the probe's socket is in the group (1.18.48). console_channel is the Console's channel name
-    from its ready marker, or None (1.18.49)."""
-    return {"ended": get_end(session_id), "console": side_attached(session_id, "console"), "probe": side_attached(session_id, "probe"),
-            "ready": side_attached(session_id, SIDE_PROBE_READY), "console_channel": ready_channel(session_id, SIDE_CONSOLE_READY)}
+    from its ready marker, or None (1.18.49). console_at is the time the Console attached (the console side marker), or None (1.18.50:
+    the probe socket's hard-cap backstop counts from it)."""
+    console = _cache().get(side_key(session_id, "console"))
+    return {"ended": get_end(session_id), "console": console is not None, "probe": side_attached(session_id, "probe"),
+            "ready": side_attached(session_id, SIDE_PROBE_READY), "console_channel": ready_channel(session_id, SIDE_CONSOLE_READY),
+            "console_at": console.get("at") if isinstance(console, dict) else None}
 
 
 def flush_stats(session_id: str, last_data: float, bytes_up: int, bytes_down: int) -> dict | None:
@@ -705,14 +784,14 @@ def end_for_probe(probe_id: str, reason: str, ended_by: str = "core", detail: st
 
 # ------------------------------------------------------------------------------------------------ status
 def status_rows(session_ids) -> dict:
-    """Per session {state, probe_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}. Cache
+    """Per session {state, probe_id, site_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}. Cache
     only. A session with no record is unknown."""
     rows = {}
     cache = _cache()
     for session_id in session_ids:
         record = get_record(session_id)
         if record is None:
-            rows[session_id] = {"state": "unknown", "probe_id": None, "started": None, "last_data": None, "console_connected": False,
+            rows[session_id] = {"state": "unknown", "probe_id": None, "site_id": None, "started": None, "last_data": None, "console_connected": False,
                                 "probe_connected": False, "bytes_up": 0, "bytes_down": 0, "reason": None, "ended_by": None}
             continue
         marker = get_end(session_id)
@@ -720,7 +799,7 @@ def status_rows(session_ids) -> dict:
         stats = read_stats(session_id)
         state = "ended" if marker else ("open" if console is not None else "pending")
         rows[session_id] = {
-            "state": state, "probe_id": record.get("probe_id"), "started": console.get("at") if isinstance(console, dict) else None,
+            "state": state, "probe_id": record.get("probe_id"), "site_id": record.get("site_id"), "started": console.get("at") if isinstance(console, dict) else None,
             "last_data": stats["last_data"], "console_connected": console is not None, "probe_connected": side_attached(session_id, "probe"),
             "bytes_up": stats["bytes_up"], "bytes_down": stats["bytes_down"], "reason": marker.get("reason") if marker else None,
             "ended_by": marker.get("ended_by") if marker else None,

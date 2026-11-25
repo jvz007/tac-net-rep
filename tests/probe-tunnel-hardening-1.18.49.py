@@ -575,7 +575,7 @@ async def case_rate():
     await console.receive(bytes_data=ack)
     text = (H.APP / "probe_tunnel_consumer.py").read_text(encoding="utf-8")
     accept = text[text.index("async def _accept_frame"):text.index("unpaired_reason")]
-    must(accept.index("_rate_exceeded()") < accept.index("check_frame"), "the rate is checked before the frame")
+    must(accept.index("_rate_exceeded(") < accept.index("check_frame"), "the rate is checked before the frame")
     must(text.count("await self._accept_frame(bytes_data)") == 2, "both consumers' receive() start with it")
 
 
@@ -619,6 +619,7 @@ def case_docs():
                    "ChannelFull", "`seq`", "console_ready", "probe_ready", "tunnel.paired", "waits in Redis"):
         must(needle in tunnel, "the tunnel docs name " + needle)
     must(re.search(r"`FRAMES_PER_SECOND_MAX`[^.\n]*?2000", tunnel), "FRAMES_PER_SECOND_MAX is named with 2000")
+    must("`DATA_FRAMES_PER_SECOND_MAX`" in tunnel, "the DATA bound is named too (1.18.50)")
     must(re.search(r"`BACKSTOP_IDLE_GRACE_SECONDS`[^.\n]*?30", tunnel), "BACKSTOP_IDLE_GRACE_SECONDS is named with 30")
     must(tun.FRAMES_PER_SECOND_MAX == 2000 and tun.BACKSTOP_IDLE_GRACE_SECONDS == 30, "the constants")
     must("Never a ticket, key, header, payload or target address" in tunnel, "the audit sentence holds again")

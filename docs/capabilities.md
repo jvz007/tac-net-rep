@@ -308,7 +308,11 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ## Core probe transport
 
-`core.probe_transport` 1.1.0 is the Network Probe websocket `/ws/tfd/network-probe/` and, since 1.1.0 (framework >=1.18.47, additive), the Engineer Console tunnel. 1.0.0 (framework >=1.18.46): `register_owner`, `request`, `send`, `presence` and `disconnect`. 1.1.0 (framework >=1.18.47): `issue_tunnel_ticket`, `end_tunnel`, `end_tunnels_for_probe` and `tunnel_status`, and the two tunnel routes `/ws/tfd/probe-tunnel/` (Console) and `/ws/tfd/network-probe/tunnel/` (probe). For the one owning module `networkprobe` only (Core verifies the caller). It shares no code, cache key, group or credential with the endpoint transport. See `docs/probe-transport.md`.
+`core.probe_transport` 1.2.0 is the Network Probe websocket `/ws/tfd/network-probe/` and, since 1.1.0 (framework >=1.18.47, additive), the Engineer Console tunnel. 1.2.0 (framework >=1.18.50, additive): `set_tunnel_site`, the optional `site_id` of the ticket spec (Core then ends a tunnel session whose engineer loses the probe's site, ended_by core with detail `scope_lost`) and `site_id` in `tunnel_status` rows. 1.0.0 (framework >=1.18.46): `register_owner`, `request`, `send`, `presence` and `disconnect`. 1.1.0 (framework >=1.18.47): `issue_tunnel_ticket`, `end_tunnel`, `end_tunnels_for_probe` and `tunnel_status`, and the two tunnel routes `/ws/tfd/probe-tunnel/` (Console) and `/ws/tfd/network-probe/tunnel/` (probe). For the one owning module `networkprobe` only (Core verifies the caller). It shares no code, cache key, group or credential with the endpoint transport. See `docs/probe-transport.md`.
+
+## Core access events
+
+`core.access_events` 1.0.0 (framework >=1.18.50) tells modules which people are affected when a role's permissions or client and site scope change, or a user's role or active state changes, or a user is deleted: the Django signal `tec_tac.access_events.access_changed` (`user_ids`, `reason`) and `changed_at(user_id)`. It says who, never what changed, fires after commit in the saving process, and misses changes that fire no Django signal (keep a periodic re-check). A module cannot raise it. See `docs/access-events.md`.
 
 ## Core agent downloads
 

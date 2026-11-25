@@ -524,7 +524,7 @@ must("json" not in text and "decode(" not in text and "struct" not in text, "the
 import re
 
 indexes = re.findall(r"data\[[^\]]*\]", text)
-must(indexes and set(indexes) == {"data[0]"} and len(indexes) == 4, ("only byte 0 is ever read", indexes))
+must(indexes and set(indexes) == {"data[0]"} and len(indexes) == 5, ("only byte 0 is ever read (1.18.50: the rate check reads it to tell DATA from the rest)", indexes))
 
 
 # ---------------------------------------------------------------- planted marker bytes never appear anywhere

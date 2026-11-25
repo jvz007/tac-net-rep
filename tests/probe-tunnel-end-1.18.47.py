@@ -225,7 +225,7 @@ async def case_status():
     must(rows_[sid_end]["state"] == "ended" and rows_[sid_end]["reason"] == "ended_by_admin" and rows_[sid_end]["ended_by"] == "admin", rows_[sid_end])
     must(rows_[unknown]["state"] == "unknown" and rows_[unknown]["probe_id"] is None, rows_[unknown])
     for row in rows_.values():
-        must(set(row) == {"state", "probe_id", "started", "last_data", "console_connected", "probe_connected", "bytes_up", "bytes_down", "reason", "ended_by"}, row)
+        must(set(row) == {"state", "probe_id", "site_id", "started", "last_data", "console_connected", "probe_connected", "bytes_up", "bytes_down", "reason", "ended_by"}, row)
     by_probe = pt.tunnel_status("networkprobe", probe_id=H.PROBE)
     must(by_probe["outcome"] == "ok" and set(by_probe["sessions"]) == {sid_pending, sid_open}, "live sessions of the probe")
     must(pt.tunnel_status("networkprobe", [])["sessions"] == {}, "an empty list")

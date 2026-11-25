@@ -22,7 +22,7 @@ meta = pt.probe_transport_contract_metadata()
 must(doc.startswith("# Network Probe transport (Core 1.18.47)"), "the title names the release")
 for operation in meta["operations"]:
     must(f"`{operation}" in doc, "the docs name " + operation)
-must(len(meta["operations"]) == 9, "nine operations")
+must(len(meta["operations"]) == 10, "ten operations (1.18.50: set_tunnel_site)")
 for code in meta["close_codes"]:
     if code.isdigit():
         must(re.search(r"\| " + code + r" \|", doc), "a close-code table has " + code)
@@ -50,7 +50,7 @@ must("No contract file for 1.18.47 exists" in doc, "the missing contract file is
 
 # ---------------------------------------------------------------- the tunnel section
 tunnel = doc[doc.index("## The tunnel (contract 1.1.0)"):]
-for operation in ("issue_tunnel_ticket", "end_tunnel", "end_tunnels_for_probe", "tunnel_status"):
+for operation in ("issue_tunnel_ticket", "end_tunnel", "end_tunnels_for_probe", "tunnel_status", "set_tunnel_site"):
     must(f"`{operation}(" in tunnel, "the tunnel section names " + operation)
 for route in (tun.CONSOLE_SOCKET_PATH, tun.PROBE_SIDE_SOCKET_PATH):
     must(f"wss://<host>{route}" in tunnel, "route " + route)
@@ -88,7 +88,7 @@ must("RecursionError" in fleet, "the nested-frame note")
 
 # ---------------------------------------------------------------- capabilities.md
 section = caps[caps.index("## Core probe transport"):caps.index("## Core agent downloads")]
-must("`core.probe_transport` 1.1.0" in section and "docs/probe-transport.md" in section and ">=1.18.47" in section and ">=1.18.46" in section, "the capabilities section")
+must("`core.probe_transport` 1.2.0" in section and ">=1.18.50" in section and "docs/probe-transport.md" in section and ">=1.18.47" in section and ">=1.18.46" in section, "the capabilities section")
 for operation in meta["operations"]:
     must(f"`{operation}`" in section, "the capabilities section names " + operation)
 must("/ws/tfd/probe-tunnel/" in section and "/ws/tfd/network-probe/tunnel/" in section, "the capabilities section names the routes")

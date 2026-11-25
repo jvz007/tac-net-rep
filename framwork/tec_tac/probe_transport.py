@@ -35,7 +35,7 @@ from typing import Any
 logger = logging.getLogger("tec_tac.probe_transport")
 
 CAPABILITY_ID = "core.probe_transport"
-CAPABILITY_VERSION = "1.1.0"  # 1.1.0 (Core 1.18.47) adds the tunnel operations; the five 1.0.0 operations are unchanged
+CAPABILITY_VERSION = "1.2.0"  # 1.1.0 (Core 1.18.47) adds the tunnel operations; 1.2.0 (Core 1.18.50) adds set_tunnel_site and the optional site_id of the ticket spec
 OWNER_MODULES = ("networkprobe",)
 OWNER_MODULE = OWNER_MODULES[0]
 ROUTE_PATTERN = "ws/tfd/network-probe/"
@@ -89,7 +89,8 @@ REFUSAL_CODES = ("probe_unknown", "probe_disabled", "probe_key_invalid")  # the 
 DISCONNECT_REASONS = ("disabled", "revoked", "key_rotated", "module_disabled")
 OPERATIONS_1_0_0 = ("register_owner", "request", "send", "presence", "disconnect")
 TUNNEL_OPERATIONS = ("issue_tunnel_ticket", "end_tunnel", "end_tunnels_for_probe", "tunnel_status")  # added in 1.1.0 (Core 1.18.47)
-OPERATIONS = OPERATIONS_1_0_0 + TUNNEL_OPERATIONS
+TUNNEL_OPERATIONS_1_2_0 = ("set_tunnel_site",)  # added in 1.2.0 (Core 1.18.50)
+OPERATIONS = OPERATIONS_1_0_0 + TUNNEL_OPERATIONS + TUNNEL_OPERATIONS_1_2_0
 
 REFUSAL_MESSAGES = {
     "malformed_header": "the Authorization header is missing, duplicated or not 'Probe <probe_id>.<key>'",
@@ -926,7 +927,8 @@ def disconnect(module_id, probe_id, reason) -> dict:
 def issue_tunnel_ticket(request, module_id, spec) -> dict:
     """Mint one single-use Console ticket for one tunnel session (1.1.0, Core 1.18.47). The caller must be the verified owner and
     module_id must equal it. Returns {outcome: ok, ticket, launch_url, expires_in: 60, session_id} or {outcome: denied|invalid|
-    rate_limited|limit_reached|probe_offline|session_exists|unavailable, code, message}. Sync. See docs/probe-transport.md."""
+    rate_limited|limit_reached|probe_offline|session_exists|unavailable, code, message}. Since 1.2.0 spec may carry site_id, the probe's site: Core
+    then refuses (denied, out_of_scope) a person who cannot see that site and ends the session when they lose it. Sync. See docs/probe-transport.md."""
     caller = _verified_owner_id()
     if caller is None:
         return dict(_DENIED)
@@ -1006,6 +1008,26 @@ def tunnel_status(module_id, session_ids=None, probe_id=None) -> dict:
         return {"outcome": "unavailable", "sessions": {}}
 
 
+def set_tunnel_site(module_id, probe_id, site_id) -> dict:
+    """The owner moved a probe to another site (1.2.0, Core 1.18.50). For every live tunnel session of that probe that the caller opened, Core
+    writes the new site into the session and has the opener's Console re-check within one 5-second tick; a person with no access to the new
+    site is ended (ended_by core, detail scope_lost). Returns {outcome: ok|invalid|denied|unavailable, updated: [session ids]}. site_id is a
+    positive int: it can never clear the check. Sync."""
+    caller = _verified_owner_id()
+    if caller is None:
+        return {**_DENIED, "updated": []}
+    if (module_id != caller or not isinstance(probe_id, str) or not PROBE_ID_PATTERN.fullmatch(probe_id)
+            or isinstance(site_id, bool) or not isinstance(site_id, int) or site_id <= 0):
+        return {"outcome": "invalid", "updated": []}
+    from . import probe_tunnel as tun
+
+    try:
+        return {"outcome": "ok", "updated": tun.update_site(caller, probe_id, site_id)}
+    except Exception:
+        logger.warning("The site of a probe's tunnel sessions could not be updated.", exc_info=True)
+        return {"outcome": "unavailable", "updated": []}
+
+
 class ProbeTransportProvider:
     """The capability provider. Every operation verifies the calling module from the call stack, never from ``module_id``."""
 
@@ -1036,6 +1058,9 @@ class ProbeTransportProvider:
     def tunnel_status(self, *, module_id, session_ids=None, probe_id=None):
         return tunnel_status(module_id, session_ids, probe_id)
 
+    def set_tunnel_site(self, *, module_id, probe_id, site_id):
+        return set_tunnel_site(module_id, probe_id, site_id)
+
 
 _PROVIDER = ProbeTransportProvider()
 
@@ -1045,6 +1070,7 @@ def tunnel_contract_metadata() -> dict[str, Any]:
 
     return {
         "since": "1.1.0",
+        "scope": "1.2.0 (Core 1.18.50): the ticket spec may carry site_id (the probe's site). Core then refuses a person who cannot see that site (denied, code out_of_scope), refuses their Console connect (4401 scope_lost) and ends their session (ended_by_core, detail scope_lost) at the next re-check after they lose it: at once (within about 10 seconds) when a role's permissions or client and site scope, or the person's role or account, change (core.access_events), and at the latest at the 5-minute re-check. set_tunnel_site tells Core the owner moved the probe. Without site_id Core checks no scope.",
         "routes": {
             "console": "wss://<host>/ws/tfd/probe-tunnel/ (the engineer's Console). Header: Authorization: Ticket <43 characters>. Binary frames only.",
             "probe": "wss://<host>/ws/tfd/network-probe/tunnel/ (the probe). Headers: Authorization: Probe <probe_id>.<key> and X-Tunnel-Session: <uuid>. Binary frames only.",
@@ -1055,13 +1081,14 @@ def tunnel_contract_metadata() -> dict[str, Any]:
             "sessions": tun.MAX_SESSIONS, "sessions_per_probe": tun.MAX_SESSIONS_PER_PROBE, "sessions_per_engineer": tun.MAX_SESSIONS_PER_ENGINEER,
             "tickets_per_engineer_per_minute": tun.TICKETS_PER_MINUTE, "ticket_seconds": tun.TICKET_TTL_SECONDS, "idle_seconds": tun.IDLE_SECONDS_MAX,
             "hard_cap_seconds": tun.CAP_SECONDS_MAX, "buffer_bytes": tun.BUFFER_CAP_BYTES, "pair_wait_seconds": tun.PAIR_WAIT_SECONDS,
-            "recheck_seconds": tun.RECHECK_SECONDS,
+            "recheck_seconds": tun.RECHECK_SECONDS, "control_frames_per_second": tun.FRAMES_PER_SECOND_MAX,
+            "data_frames_per_second": tun.DATA_FRAMES_PER_SECOND_MAX,
         },
         "close_reasons": list(tun.ALL_REASONS),
         "close_codes": {
             "4401": "ticket unknown, used or expired, or the account, permission or module check failed; the probe side's identity was refused",
             "4403": "plain-text connection", "4404": "no pending session of that name for this ticket or probe",
-            "4409": "that side of the session is already attached", "1002": "protocol error: a text frame, an unknown type byte or a bad length",
+            "4409": "that side of the session is already attached", "1002": "protocol error: a text frame, an unknown type byte, a bad length, or too many frames in a second (detail rate_control or rate_data)",
             "1013": "retry later: a busy or faulty server, or a relay that cannot keep up (relay_overloaded)", "1001": "the server is going away (server_restart)",
             "4503": "no owner registered, or the tunnel consumer could not be loaded",
         },
@@ -1090,10 +1117,11 @@ def probe_transport_contract_metadata() -> dict[str, Any]:
             "send": "send(module_id, probe_id, frame) -> {outcome: ok|offline|denied|invalid}. frame.type must be event or reply. Fire and forget: no reply and no ack. The owner answers probe.hello with a reply frame that carries the hello's id.",
             "presence": "presence(module_id, probe_ids) -> {outcome, presence: {probe_id: {connected, since, client_id, site_id}}}. At most 2000 ids. Reads the cache only.",
             "disconnect": "disconnect(module_id, probe_id, reason) -> {outcome: ok|offline|denied|invalid}. reason is one of " + ", ".join(DISCONNECT_REASONS) + ". Closes that probe's socket with 4401.",
-            "issue_tunnel_ticket": "issue_tunnel_ticket(request, module_id, spec) -> {outcome: ok, ticket, launch_url, expires_in: 60, session_id} or {outcome: denied|invalid|rate_limited|limit_reached|probe_offline|session_exists|unavailable, code, message} (1.1.0). request is the signed-in Tec-Tac request of the engineer. spec is {session_id (a uuid4 string), probe_id, permission (a networkprobe. permission the engineer must hold), target_label (audit text only), idle_s (default 900, 60 to 900), cap_s (default 14400, 60 to 14400)}. Core re-checks the account and the permission; the owner checks the person's scope and port rules before it calls, then asks the probe for tunnel.open.",
+            "issue_tunnel_ticket": "issue_tunnel_ticket(request, module_id, spec) -> {outcome: ok, ticket, launch_url, expires_in: 60, session_id} or {outcome: denied|invalid|rate_limited|limit_reached|probe_offline|session_exists|unavailable, code, message} (1.1.0). request is the signed-in Tec-Tac request of the engineer. spec is {session_id (a uuid4 string), probe_id, permission (a networkprobe. permission the engineer must hold), target_label (audit text only), idle_s (default 900, 60 to 900), cap_s (default 14400, 60 to 14400)}. Since 1.2.0 spec also takes site_id (a positive int, optional): the probe's site; Core refuses a person who cannot see it (denied, code out_of_scope) and ends the session when they lose it. Core re-checks the account and the permission; the owner checks the port rules before it calls and, until it sends site_id, the person's scope too, then asks the probe for tunnel.open.",
             "end_tunnel": "end_tunnel(module_id, session_id, ended_by) -> {outcome: ok|invalid|denied|unavailable, already_ended} (1.1.0). ended_by is engineer, admin or core. The first end wins; both data sockets close at once and the probe is sent tunnel.close.",
             "end_tunnels_for_probe": "end_tunnels_for_probe(module_id, probe_id, reason) -> {outcome: ok|invalid|denied|unavailable, ended: [session ids]} (1.1.0). reason is ended_by_core, probe_offline, server_restart, or a disconnect reason (kept in the audit row; the session ends ended_by_core). Call it when a probe is disabled or revoked.",
-            "tunnel_status": "tunnel_status(module_id, session_ids=None, probe_id=None) -> {outcome, sessions: {session_id: {state: pending|open|ended|unknown, probe_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}}} (1.1.0). Name up to 200 session ids, or one probe id for its live sessions. Reads the cache only.",
+            "set_tunnel_site": "set_tunnel_site(module_id, probe_id, site_id) -> {outcome: ok|invalid|denied|unavailable, updated: [session ids]} (1.2.0). Call it after a probe moves to another site. Core writes the new site into every live session of that probe that the caller opened and re-checks each opener within about 5 seconds; a person with no access to the new site is ended (ended_by_core, detail scope_lost). site_id is a positive int.",
+            "tunnel_status": "tunnel_status(module_id, session_ids=None, probe_id=None) -> {outcome, sessions: {session_id: {state: pending|open|ended|unknown, probe_id, site_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}}} (1.1.0). Name up to 200 session ids, or one probe id for its live sessions. Reads the cache only.",
         },
         "events": "A probe event frame is handed to the owner's registered task with (probe_id, frame). There is no ack: delivery is best effort, and bulk data and the outbox stay on HTTPS. Core writes no per-event audit row; the owner writes its own.",
         "one_connection": "One live connection per probe, across processes. A new connection closes the older one with 4409.",
@@ -1116,8 +1144,8 @@ def probe_transport_contract_metadata() -> dict[str, Any]:
             "failures_per_address_per_minute": FAILURES_PER_ADDRESS_PER_MINUTE, "failures_per_probe_per_minute": FAILURES_PER_PROBE_PER_MINUTE,
         },
         "audit": "Non-strict Core rows (module core, provenance probe-transport, object type probe): connect, disconnect and refusals (probe id when valid, reason code, address). Never a key, an Authorization header or a payload.",
-        "core_does_not": "Core does not interpret messages, keep a probe record, store events, check a person's scope or port rules, read tunnel stream ids, windows or payloads, or run module code. Agent and probe credentials never cross.",
-        "added_in": "1.0.0 (Core 1.18.46): the control channel and its five operations. 1.1.0 (Core 1.18.47, framework >=1.18.47): the tunnel operations (issue_tunnel_ticket, end_tunnel, end_tunnels_for_probe, tunnel_status) and the two tunnel routes. Additive: nothing in 1.0.0 changed.",
+        "core_does_not": "Core does not interpret messages, keep a probe record, store events, check a person's port rules, read tunnel stream ids, windows or payloads, or run module code. Agent and probe credentials never cross.",
+        "added_in": "1.0.0 (Core 1.18.46): the control channel and its five operations. 1.1.0 (Core 1.18.47, framework >=1.18.47): the tunnel operations (issue_tunnel_ticket, end_tunnel, end_tunnels_for_probe, tunnel_status) and the two tunnel routes. Additive: nothing in 1.0.0 changed. 1.2.0 (Core 1.18.50, framework >=1.18.50): set_tunnel_site, the optional site_id of the ticket spec, site_id in tunnel_status rows and Core's own scope check of a live tunnel session. Additive: nothing in 1.0.0 or 1.1.0 changed, and a session opened without site_id behaves as before.",
         "tunnel": tunnel_contract_metadata(),
     }
 
@@ -1130,7 +1158,7 @@ def register_core_probe_transport_capability():
         module_id="core",
         version=CAPABILITY_VERSION,
         provider=_PROVIDER,
-        description="The Network Probe websocket and tunnel: identity through the owner's authenticator, presence, requests, events, disconnect, and (1.1.0) the Console ticket, the tunnel relay and its end and status, for the owning module (networkprobe) only.",
+        description="The Network Probe websocket and tunnel: identity through the owner's authenticator, presence, requests, events, disconnect, and (1.1.0) the Console ticket, the tunnel relay and its end and status, and (1.2.0) the session's site, for the owning module (networkprobe) only.",
         operations=OPERATIONS,
         metadata=probe_transport_contract_metadata(),
     )

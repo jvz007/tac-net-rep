@@ -134,31 +134,33 @@ The pools are sized for up to 500 connected probes. A reconnect storm after a se
 
 ## The tunnel (contract 1.1.0)
 
-`core.probe_transport` 1.1.0 needs framework 1.18.47 or later. It lets an engineer reach a device behind a Network Probe through a desktop tool, the Engineer Console, with Core relaying the traffic. Core checks the engineer's account and permission and relays frames. It never reads, logs, audits or stores what the frames carry. `networkprobe` decides which device and port an engineer may reach; Core does not.
+`core.probe_transport` 1.1.0 needs framework 1.18.47 or later. It lets an engineer reach a device behind a Network Probe through a desktop tool, the Engineer Console, with Core relaying the traffic. Core checks the engineer's account and permission and relays frames. It never reads, logs, audits or stores what the frames carry. `networkprobe` decides which device and port an engineer may reach; Core does not. Since 1.2.0 (framework 1.18.50 or later) Core also keeps checking that the engineer may still see the probe's site, so a session ends when the engineer loses access (see "Scope and access (1.2.0)").
 
-Four operations, for `networkprobe` only (Core verifies the caller; `module_id` must equal it). All are sync.
+Five operations, for `networkprobe` only (Core verifies the caller; `module_id` must equal it). All are sync. The first four are 1.1.0; `set_tunnel_site` is 1.2.0.
 
 | Operation | Returns |
 |---|---|
 | `issue_tunnel_ticket(request, module_id, spec)` | `{outcome: ok, ticket, launch_url, expires_in: 60, session_id}` or `{outcome: denied, invalid, rate_limited, limit_reached, probe_offline, session_exists or unavailable, code, message}`. `request` is the engineer's signed-in Tec-Tac request. |
 | `end_tunnel(module_id, session_id, ended_by)` | `{outcome: ok, invalid, denied or unavailable, already_ended}`. `ended_by` is `engineer`, `admin` or `core`. |
 | `end_tunnels_for_probe(module_id, probe_id, reason)` | `{outcome, ended: [session ids]}`. `reason` is `ended_by_core`, `probe_offline`, `server_restart` or a 1.0.0 disconnect reason. |
-| `tunnel_status(module_id, session_ids=None, probe_id=None)` | `{outcome, sessions: {id: {state, probe_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}}}`. Up to 200 ids, cache only. `state` is `pending`, `open`, `ended` or `unknown`. |
+| `tunnel_status(module_id, session_ids=None, probe_id=None)` | `{outcome, sessions: {id: {state, probe_id, site_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}}}`. Up to 200 ids, cache only. `state` is `pending`, `open`, `ended` or `unknown`. `site_id` is the session's site, or null when the owner sent none (1.2.0). |
+| `set_tunnel_site(module_id, probe_id, site_id)` | `{outcome: ok, invalid, denied or unavailable, updated: [session ids]}` (1.2.0). `site_id` is a positive integer. |
 
 ### The ticket
 
-`spec` is `{session_id, probe_id, permission, target_label, idle_s, cap_s}`:
+`spec` is `{session_id, probe_id, permission, target_label, idle_s, cap_s, site_id}`:
 
 * `session_id` is a uuid4 string. One ticket per session and no resume: a second ticket for the same id is refused (`session_exists`), even after the session ended.
 * `permission` is a `networkprobe.` permission code the engineer must hold. Core checks it again at connect and every 5 minutes.
 * `target_label` is audit text only (at most 128 characters).
 * `idle_s` is 60 to 900 (default 900). `cap_s` is 60 to 14400 (default 14400).
+* `site_id` (1.2.0, optional) is the probe's site, a positive integer (not a boolean). Send it: without it Core checks no scope.
 
-Core checks, in this order: a signed-in request with a live Knox digest, the spec, the permission, the probe's presence (an offline probe is refused, so no slot is spent), the ticket rate, then the slots. The ticket is `secrets.token_urlsafe(32)`, 43 characters. Only its SHA-256 is stored, under its own cache prefix, for `TICKET_TTL_SECONDS` (60) and it works once. Every refusal writes one deny row (`custom:probe-tunnel-refused`) and never holds the ticket.
+Core checks, in this order: a signed-in request with a live Knox digest, the spec, the permission, the engineer's access to `site_id` (when sent), the probe's presence (an offline probe is refused, so no slot is spent), the ticket rate, then the slots. The ticket is `secrets.token_urlsafe(32)`, 43 characters. Only its SHA-256 is stored, under its own cache prefix, for `TICKET_TTL_SECONDS` (60) and it works once. Every refusal writes one deny row (`custom:probe-tunnel-refused`) and never holds the ticket.
 
 The launch link is `tectac-console://open?host=<server host>&ticket=<ticket>`. The host comes from the request, lower case, without port 443.
 
-The owner's order: check the engineer's scope and the port rules, call `issue_tunnel_ticket`, then ask the probe for `tunnel.open` with `request()` or `send()`, and hand the engineer the link. Core never sends `tunnel.open` and never reads `func`. Call `end_tunnels_for_probe` when a probe is disabled or revoked. `disconnect()` does not end tunnels by itself.
+The owner's order: check the engineer's scope and the port rules, call `issue_tunnel_ticket` (with `site_id`), then ask the probe for `tunnel.open` with `request()` or `send()`, and hand the engineer the link. Core never sends `tunnel.open` and never reads `func`. Call `end_tunnels_for_probe` when a probe is disabled or revoked. `disconnect()` does not end tunnels by itself.
 
 ### Limits
 
@@ -176,7 +178,8 @@ All counted in the shared Django cache (Redis). With no shared cache Core refuse
 | `PAIR_WAIT_SECONDS` | 15 (the probe side must attach this soon after the Console) |
 | `BUFFER_CAP_BYTES` | 1 MiB (Console frames held before the probe side attaches) |
 | `RECHECK_SECONDS` | 300 (account, permission, module and probe re-check) |
-| `FRAMES_PER_SECOND_MAX` | 2000 messages a second on one tunnel socket, then `protocol_error` (1.18.49) |
+| `FRAMES_PER_SECOND_MAX` | 2000 control frames (OPEN, ACK, CLOSE) a second on one tunnel socket, then `protocol_error` (1.18.49; DATA counted apart since 1.18.50) |
+| `DATA_FRAMES_PER_SECOND_MAX` | 10000 DATA frames a second on one tunnel socket, then `protocol_error` (1.18.50) |
 | `BACKSTOP_IDLE_GRACE_SECONDS` | 30 (the probe socket's own idle timer: the idle limit plus this, 1.18.49) |
 
 A slot is held from the ticket (pending) until the session ends. An entry carries an expiry (75 seconds while pending, the hard cap plus 60 seconds once open), so a leaked slot heals.
@@ -191,6 +194,17 @@ Both are binary only: a text frame is a protocol error (close 1002). No Origin r
 | `wss://<host>/ws/tfd/network-probe/tunnel/` (probe) | `Authorization: Probe <probe_id>.<key>` and `X-Tunnel-Session: <uuid>` |
 
 The Console side redeems its ticket once. Core re-checks the account at connect: the user is active and not blocked, the Knox token is live, the Tec-Tac session is not revoked, idle or past its lifetime (the engineer's idle and absolute sign-in limits apply to a live tunnel; the engineer's own DATA frames count as activity, output from the target does not, rule 1.8), the permission is held and the module is enabled. The probe side goes through the same identity check and failure counters as the control route, and its session must be a pending session of that probe. A `Ticket` or `Token` header on the probe route, and a `Probe` or `Token` header on the Console route, is refused 4401 (`wrong_scheme`) and never reaches an authenticator. One Console side and one probe side per session.
+
+### Scope and access (1.2.0)
+
+Core keeps the engineer's access to the probe's site true for as long as a session runs. It needs the owner to send `site_id`.
+
+* At the ticket: a person who cannot see `site_id` gets `{outcome: denied, code: out_of_scope}` and one deny row. A fault while checking is `unavailable` (fail closed).
+* At connect: the Console is refused 4401 with the close text `scope_lost`.
+* While the session runs: Core re-reads the person and asks the same question the owner asks at open (Tactical's client and site scope and the site-list right, through `tec_tac.resources.get_site`). It does this at the 5-minute re-check and also at once when the person's access changes (below). A person who lost the site ends the session `ended_by_core` with detail `scope_lost`. A fault while checking the site ends the session with detail `check_failed` (fail closed), as a fault in the account check does. A re-check that cannot run at all (the pool is busy, a timeout) is transient: it retries after 30 seconds and the stale-grace end still applies. No new close reason and no wire change.
+* When the owner moves a probe to another site it calls `set_tunnel_site(module_id, probe_id, site_id)`. Core writes the new site into every live session of that probe that the caller opened (session ids that ended are skipped) and has each opener's Console re-check within one 5 second tick. An engineer with no access to the new site is ended; one with access keeps the session.
+* The access marker: Core's access-change hook (`core.access_events`, `docs/access-events.md`) stamps each affected person's id and a time in the shared cache when a role's permissions or client and site scope change, or a user's role or active state changes. Each Console socket reads its own person's marker every 5 seconds and, when it is newer than the last one it saw, runs the re-check in that tick. So a real loss ends the session within about 5 to 10 seconds, not instantly. A change that touches nothing the person holds ends nothing. Changes that fire no Django signal (`queryset.update`, raw SQL) and a deleted site wait for the 5-minute re-check.
+* Without `site_id` (an owner that predates 1.2.0) Core checks no scope; the account, permission and module checks still run. Core publishes no read of other people's access: it ends the sessions itself.
 
 ### Frames
 
@@ -212,20 +226,20 @@ Known residual: a frame sent to a peer that has already disconnected waits in Re
 
 ### Limits on a tunnel socket (1.18.49)
 
-* Each socket counts its messages in a one-second window, in memory only (no cache or database call), before it looks at the frame. The `FRAMES_PER_SECOND_MAX` (2000) + 1 th message in a window ends the session `protocol_error` (close 1002, `ended_by` `core`). A 100 Mbit link carries about 400 full DATA frames a second plus ACKs.
+* Each socket counts its messages in a one-second window, in memory only (no cache or database call), before it looks at the frame. DATA frames and control frames are counted apart in the same window (1.18.50, so a fast copy is not ended by its own ACKs). The `FRAMES_PER_SECOND_MAX` (2000) + 1 th control frame, or the `DATA_FRAMES_PER_SECOND_MAX` (10000) + 1 th DATA frame, ends the session `protocol_error` (close 1002, `ended_by` `core`); the end row's `detail` is `rate_control` or `rate_data`, so an over-rate is told apart from a malformed frame. A text frame, an empty message or an unknown type counts as control. 10000 DATA frames a second is a 100 Mbit/s stream even in 1.5 KB frames and about 300 MB/s in 32 KiB frames.
 * Message size: Core checks the length (5 up to 5 + 32 KiB) first thing in `receive()`, but only after the server has buffered the message. Tactical 1.6.1 runs uvicorn (a service still named `daphne.service`, started without `--ws-max-size`), so the hosting stack accepts up to its default of 16 MiB per message. A 1.5.2 server runs Daphne, where no limit was verified. This is a known gap in the hosting stack, not in Core; a unit-wide `--ws-max-size` is an installer change and is not part of this release.
 * The 4403 refusal of a plain-text connection reads `X-Forwarded-Proto`. Tactical's nginx `location ~ ^/ws/` block sets `Host`, `X-Real-IP`, `X-Forwarded-For` and `X-Forwarded-Host` but not `X-Forwarded-Proto`, so on a stock server the refusal never fires. Nothing is exposed by that today: nginx serves `/ws/` on 443 only, and the probe and the Console both refuse `ws://` in their own code.
-* Backstop timers on the probe socket: once paired, the probe socket ends the session `idle_timeout` when no DATA frame has moved in either direction for the idle limit plus `BACKSTOP_IDLE_GRACE_SECONDS`, and `hard_cap` when the session record's creation time plus the cap plus `SLOT_GRACE_SECONDS` (60) has passed. Both are later than the Console's own timers, so the Console fires first in normal running. They exist for a Console worker that died without writing an end. A session ended by a backstop is written by the probe socket: the end row and `tunnel.closed` carry the Console's last flushed counters, and a live Console's own final row is dropped as a duplicate.
+* Backstop timers on the probe socket: once paired, the probe socket ends the session `idle_timeout` when no DATA frame has moved in either direction for the idle limit plus `BACKSTOP_IDLE_GRACE_SECONDS`, and `hard_cap` when the Console's attach time (the console side marker; the end of the 60 second ticket window while it is unknown) plus the cap plus `SLOT_GRACE_SECONDS` (60) has passed. The cap counts from the Console's real start, not from the ticket (1.18.50), so a Console that connects late in the ticket window still has its full cap. Both are later than the Console's own timers (the Console's cap is at most its start plus the cap plus one 5 second tick), so the Console fires first in normal running. They exist for a Console worker that died without writing an end. A session ended by a backstop is written by the probe socket: the end row and `tunnel.closed` carry the Console's last flushed counters, and a live Console's own final row is dropped as a duplicate.
 
 ### Close codes
 
 | Code | Meaning on the tunnel routes |
 |---|---|
-| 4401 | Ticket unknown, used or expired; the account, permission or module check failed; the probe's identity was refused. |
+| 4401 | Ticket unknown, used or expired; the account, permission, module or site-access check failed (`scope_lost`); the probe's identity was refused. |
 | 4403 | Plain-text connection. |
 | 4404 | No pending session of that name (unknown, ended, or another probe's). |
 | 4409 | That side of the session is already attached. |
-| 1002 | Protocol error: a text frame, a type byte outside 1 to 4, a bad length, or more than 2000 messages in a second. |
+| 1002 | Protocol error: a text frame, a type byte outside 1 to 4, a bad length, more than 2000 control frames or more than 10000 DATA frames in a second (`detail` `rate_control` or `rate_data`). |
 | 1009 | Not used by the tunnel routes (an oversize frame is 1002). |
 | 1013 | Retry later: a busy or faulty server, or a relay that cannot keep up (`relay_overloaded`). |
 | 1001 | The server is going away (`server_restart`). |
@@ -237,7 +251,7 @@ The close text and the `reason` of the end row and the `tunnel.closed` event com
 
 * Console drops: `console_disconnected` (no resume). The probe's data socket drops: `probe_offline`. No probe side within 15 seconds of the Console: `probe_offline`. No Console within the 60 second ticket window: `console_not_connected`.
 * A `send` that raises `ChannelFull`, takes over 5 seconds or fails, and a frame with the wrong sequence number, end the session `relay_overloaded`.
-* The watcher (5 second tick) ends the session `idle_timeout` or `hard_cap`, and every 5 minutes (with up to 30 seconds of jitter) re-checks the account, the permission, the module and the probe's presence or data socket. A lost right, a disabled account, a revoked session or a disabled module ends it `ended_by_core`.
+* The watcher (5 second tick) ends the session `idle_timeout` or `hard_cap`, and every 5 minutes (with up to 30 seconds of jitter) re-checks the account, the permission, the module and the probe's presence or data socket. A lost right, a disabled account, a revoked session, a disabled module or a lost site (`scope_lost`) ends it `ended_by_core`.
 * When Core refuses a probe at its own 5-minute re-check, it ends that probe's tunnels itself, `ended_by_core`.
 
 ### End, events and audit

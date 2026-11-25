@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""1.18.47 regression: the contract core.probe_transport 1.1.0 (the five 1.0.0 operations unchanged, and issue_tunnel_ticket, end_tunnel,
+"""1.18.47 regression: the contract core.probe_transport 1.2.0 (1.18.50: set_tunnel_site added; first written for 1.1.0: the five 1.0.0 operations unchanged, and issue_tunnel_ticket, end_tunnel,
 end_tunnels_for_probe, tunnel_status added; the 1.18.46 contract test, updated).
 
 Covered (the real probe_transport.py under the stubs of tests/probe_transport_harness.py; contracts.py and audit.py need Django, so their
-source is read with ast): the nine CORE_CONTRACTS rows exist, point at functions of tec_tac.probe_transport and agree with
+source is read with ast): the ten CORE_CONTRACTS rows exist, point at functions of tec_tac.probe_transport and agree with
 probe_transport_contract_metadata() (operations, version 1.0.0, owner networkprobe); the capability registers once with the five operations
 and its metadata; apps.py wires the registration and the route in their own guarded blocks; _record_probe_transport writes provenance
 probe-transport, object type probe, never strict, core_refusal only for a refusal, and never a key.
@@ -29,12 +29,14 @@ APP = H.APP
 
 OPERATIONS_1_0_0 = ["register_owner", "request", "send", "presence", "disconnect"]
 TUNNEL_OPERATIONS = ["issue_tunnel_ticket", "end_tunnel", "end_tunnels_for_probe", "tunnel_status"]
-OPERATIONS = OPERATIONS_1_0_0 + TUNNEL_OPERATIONS
+TUNNEL_OPERATIONS_1_2_0 = ["set_tunnel_site"]
+OPERATIONS = OPERATIONS_1_0_0 + TUNNEL_OPERATIONS + TUNNEL_OPERATIONS_1_2_0
 tun = H.tun
 meta = pt.probe_transport_contract_metadata()
-must(meta["id"] == "core.probe_transport" and meta["version"] == "1.1.0" and pt.CAPABILITY_VERSION == "1.1.0", "id and version")
-must(len(OPERATIONS) == 9 and list(pt.OPERATIONS) == OPERATIONS, "nine operations")
+must(meta["id"] == "core.probe_transport" and meta["version"] == "1.2.0" and pt.CAPABILITY_VERSION == "1.2.0", "id and version")
+must(len(OPERATIONS) == 10 and list(pt.OPERATIONS) == OPERATIONS, "ten operations")
 must("1.1.0 (Core 1.18.47, framework >=1.18.47)" in meta["added_in"] and "1.0.0 (Core 1.18.46)" in meta["added_in"] and "Additive" in meta["added_in"], meta["added_in"])
+must("1.2.0 (Core 1.18.50, framework >=1.18.50)" in meta["added_in"], meta["added_in"])
 tunnel = meta["tunnel"]
 must(tunnel["close_reasons"] == list(tun.ALL_REASONS) and len(tun.END_REASONS) == 14, "the fixed reason list")
 must(tunnel["limits"]["sessions"] == 50 and tunnel["limits"]["sessions_per_probe"] == 5 and tunnel["limits"]["sessions_per_engineer"] == 3
@@ -64,7 +66,7 @@ def literal_assignment(path, target):
 
 rows = [r for r in literal_assignment(APP / "contracts.py", "CORE_CONTRACTS") if r.get("area") == "probe-transport"]
 must(sorted(r["name"] for r in rows) == sorted(OPERATIONS), [r["name"] for r in rows])
-must(len(rows) == 9, "nine rows")
+must(len(rows) == 10, "ten rows")
 all_rows = literal_assignment(APP / "contracts.py", "CORE_CONTRACTS")
 must(len({(r["import_path"], r["name"]) for r in all_rows}) == len(all_rows), "no duplicate contract rows")
 for row in rows:
@@ -72,6 +74,9 @@ for row in rows:
     if row["name"] in OPERATIONS_1_0_0:  # the 1.0.0 rows are untouched
         must("added 1.18.46" in row["purpose"] and "core.probe_transport 1.0.0" in row["purpose"] and "framework >=1.18.46" in row["purpose"], row["name"])
         must("networkprobe" in row["purpose"] or row["name"] == "register_owner", row["name"])
+    elif row["name"] in TUNNEL_OPERATIONS_1_2_0:
+        must("added 1.18.50" in row["purpose"] and "core.probe_transport 1.2.0" in row["purpose"] and "framework >=1.18.50" in row["purpose"], row["name"])
+        must("networkprobe" in row["purpose"] and "Additive" in row["purpose"], row["name"])
     else:
         must("added 1.18.47" in row["purpose"] and "core.probe_transport 1.1.0" in row["purpose"] and "framework >=1.18.47" in row["purpose"], row["name"])
         must("networkprobe" in row["purpose"] and "Additive" in row["purpose"], row["name"])
@@ -90,7 +95,7 @@ sys.modules["tec_tac.capabilities"] = stub_caps
 pt.register_core_probe_transport_capability()
 must(len(registered) == 1, registered)
 cap = registered[0]
-must(cap["id"] == "core.probe_transport" and cap["module_id"] == "core" and cap["version"] == "1.1.0", cap["id"])
+must(cap["id"] == "core.probe_transport" and cap["module_id"] == "core" and cap["version"] == "1.2.0", cap["id"])
 must(list(cap["operations"]) == OPERATIONS and cap["metadata"] == meta, "operations and metadata")
 for name in OPERATIONS:
     must(callable(getattr(cap["provider"], name)), "the provider has " + name)

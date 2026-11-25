@@ -24,9 +24,13 @@ side console_not_connected. A relay that cannot keep up (ChannelFull, a send tha
 relay_overloaded and never drops a frame. Each direction numbers its frames inside the channel-layer message (seq, not on the wire): a gap, a repeat
 or a reorder (a message the layer expired after 60 seconds, a Redis flush) ends the session relay_overloaded.
 
-Limits on each socket: FRAMES_PER_SECOND_MAX messages in a one-second window (counted in memory, checked first) end the session protocol_error.
-The probe socket also keeps backstop timers (idle limit plus a grace, hard cap plus the slot grace) so a Console worker that died cannot leave a
-session running; a session ended by them is written and delivered by the probe consumer.
+Limits on each socket: more than FRAMES_PER_SECOND_MAX control frames (OPEN, ACK, CLOSE) or DATA_FRAMES_PER_SECOND_MAX DATA frames in a one-second
+window (counted apart, in memory, checked first) end the session protocol_error; the end row's detail says rate_control or rate_data (1.18.50).
+The probe socket also keeps backstop timers (idle limit plus a grace, the Console's attach time plus the hard cap plus the slot grace) so a
+Console worker that died cannot leave a session running; a session ended by them is written and delivered by the probe consumer.
+
+Access (1.18.50): the Console's 5-minute re-check also asks whether the person may still see the session's site (probe_tunnel.scope_refusal), and
+it runs at once, in the next 5-second tick, when the person's access marker (core.access_events) is newer than the last one this socket saw.
 
 The receive loop never touches the database, the cache or the broker: every blocking call runs on one of the probe route's own pools, never
 on the event loop's default executor and never on a pool of the agent route. Core logs no frame, no byte and no ticket.
@@ -95,7 +99,8 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
         self._send_seq = 0
         self._recv_seq = 0
         self._rate_start = None
-        self._rate_count = 0
+        self._rate_count = 0  # control frames in the window
+        self._rate_data = 0  # DATA frames in the window
 
     # -------------------------------------------------------------------------------------------- helpers
     async def _cache_call(self, func, *args, default=None, busy_raises=False):
@@ -282,18 +287,25 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
         return False
 
     # -------------------------------------------------------------------------------------------- limits and pairing (shared)
-    def _rate_exceeded(self):
-        """In memory only (no cache, no database): more than FRAMES_PER_SECOND_MAX messages in one second."""
+    def _rate_exceeded(self, bytes_data=None):
+        """In memory only (no cache, no database). DATA frames and control frames are counted apart in the same one-second window: more than
+        DATA_FRAMES_PER_SECOND_MAX DATA frames, or more than FRAMES_PER_SECOND_MAX of anything else (OPEN, ACK, CLOSE, a text frame, an empty or
+        unknown message), is over. Returns the bound that was passed (RATE_DATA or RATE_CONTROL), or None."""
         now = self._clock()
         if self._rate_start is None or now - self._rate_start >= 1.0:
-            self._rate_start, self._rate_count = now, 0
+            self._rate_start, self._rate_count, self._rate_data = now, 0, 0
+        if isinstance(bytes_data, (bytes, bytearray)) and len(bytes_data) > 0 and bytes_data[0] == tun.TYPE_DATA:
+            self._rate_data += 1
+            return tun.RATE_DATA if self._rate_data > tun.DATA_FRAMES_PER_SECOND_MAX else None
         self._rate_count += 1
-        return self._rate_count > tun.FRAMES_PER_SECOND_MAX
+        return tun.RATE_CONTROL if self._rate_count > tun.FRAMES_PER_SECOND_MAX else None
 
     async def _accept_frame(self, bytes_data):
-        """The first thing receive() does: the rate, then the frame check. False (and the session ended protocol_error) when it fails."""
-        if self._rate_exceeded() or bytes_data is None or not tun.check_frame(bytes_data):
-            await self._end("protocol_error")
+        """The first thing receive() does: the rate, then the frame check. False (and the session ended protocol_error, with the rate bound as
+        the end row's detail when it was the rate) when it fails."""
+        over = self._rate_exceeded(bytes_data)
+        if over or bytes_data is None or not tun.check_frame(bytes_data):
+            await self._end("protocol_error", detail=over or "")
             return False
         return True
 
@@ -522,7 +534,11 @@ class ProbeTunnelProbeConsumer(_TunnelConsumer):
         if self._paired and now - self._last_data >= int(self._record["idle_s"]) + tun.BACKSTOP_IDLE_GRACE_SECONDS:
             await self._end("idle_timeout", backstop=True)
             return False
-        if self._wall() >= float(self._record.get("created", 0)) + int(self._record["cap_s"]) + tun.SLOT_GRACE_SECONDS:
+        # 1.18.50: the cap counts from the Console's real start (its attach marker), not from the ticket: a Console that connects late in the
+        # 60 second ticket window has its cap that much later. With no attach marker read, the end of the ticket window is the latest start.
+        attached = state.get("console_at") if state is not None else None
+        started = float(attached) if isinstance(attached, (int, float)) and not isinstance(attached, bool) else float(self._record.get("created", 0)) + tun.TICKET_TTL_SECONDS
+        if self._wall() >= started + int(self._record["cap_s"]) + tun.SLOT_GRACE_SECONDS:
             await self._end("hard_cap", backstop=True)
             return False
         if now >= self._next_recheck:
@@ -562,6 +578,7 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         self._next_flush = 0.0
         self._next_recheck = 0.0
         self._identity_ok_at = 0.0
+        self._access_seen = 0.0  # the newest access marker this socket has acted on (1.18.50)
 
     async def _connect_inner(self):
         if not await self._gate():
@@ -571,6 +588,7 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
             await self._cache_call(pt.note_failure, self._ip)
             await self._refuse(pt.CLOSE_UNAUTHORIZED, reason)
             return
+        self._access_seen = self._wall() - 1  # before the open decision reads anything: a change after this instant starts a re-check
         try:
             status, value, record, why = await asyncio.wait_for(pt.run_in_pool("auth", _console_open_job, ticket), timeout=pt.AUTH_TIMEOUT_SECONDS)
         except pt.PoolFull:
@@ -682,6 +700,12 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
                 self._ended_local = True
                 await self._close_with(marker.get("reason") or "ended_by_core")
                 return False
+        # 1.18.50: one cache read a tick. A newer access marker for this person (a role, scope or account change, or the owner moving the probe
+        # to another site) brings the re-check forward to this tick; the re-check then decides, so a change that touches nothing ends nothing.
+        changed = await self._cache_call(tun.access_changed_at, self._value["user_id"], default=None)
+        if changed is not None and changed > self._access_seen:
+            self._access_seen = changed
+            self._next_recheck = now
         if now >= self._next_recheck:
             activity = datetime.fromtimestamp(self._last_up_wall, timezone.utc) if self._up_since_check and self._last_up_wall else None
             try:
