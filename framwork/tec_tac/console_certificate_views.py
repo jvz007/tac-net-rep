@@ -84,6 +84,17 @@ def _checked_body(request, allowed: tuple[str, ...]):
     return dict(data)
 
 
+def _refuse_api_key(request, object_type: str):
+    """1.18.53: the enrolment-code, issue and CA-replace routes need an interactive signed-in session. Anything else (a Tactical API key, a plain
+    Django session) gets one non-strict deny row and 403 interactive_session_required, before the body or the permission is looked at. The row
+    holds no key and no header. Returns None for an interactive session."""
+    cc = _cc()
+    if cc.interactive_session(request):
+        return None
+    cc.deny(request.user, object_type, None, reason="api_key_refused")
+    return _error("interactive_session_required", "This needs a person signed in to Tec-Tac. An API key cannot do it.", 403)
+
+
 def _refuse_permission(request, object_type: str, message: str, object_id=None):
     _cc().deny(request.user, object_type, object_id)
     raise PermissionDenied(message)
@@ -103,6 +114,9 @@ class ConsoleCertificateEnrolmentCodeView(APIView):
     throttle_classes = [ConsoleEnrolmentCodeMinThrottle, ConsoleEnrolmentCodeDayThrottle]
 
     def post(self, request):
+        refused = _refuse_api_key(request, "console_certificate")
+        if refused is not None:
+            return refused
         body = _checked_body(request, ())
         if isinstance(body, Response):
             return body
@@ -188,6 +202,9 @@ class ConsoleCertificateIssueView(APIView):
     throttle_classes = [ConsoleCertificateWriteMinThrottle, ConsoleCertificateWriteDayThrottle]
 
     def post(self, request):
+        refused = _refuse_api_key(request, "console_certificate")
+        if refused is not None:
+            return refused
         if not can_manage_console_certificates(request.user):
             _refuse_permission(request, "console_certificate", "Tec-Tac core.console_certificates.manage permission is required to allow a Console enrolment.")
         body = _checked_body(request, ("user_id",))
@@ -263,6 +280,9 @@ class ConsoleCertificateCaReplaceView(APIView):
     throttle_classes = [ConsoleCertificateWriteMinThrottle, ConsoleCertificateWriteDayThrottle]
 
     def post(self, request):
+        refused = _refuse_api_key(request, "console_ca")
+        if refused is not None:
+            return refused
         if not is_effective_superuser(request.user):
             _refuse_permission(request, "console_ca", "Only a Tec-Tac superuser may replace the Console certificate authority.")
         body = _checked_body(request, ("confirm",))

@@ -11,6 +11,12 @@ probe route's own pools. The Console side redeems its one-time ticket and re-che
 authenticator exactly like the control route and names its session in X-Tunnel-Session (4404 unknown, 4409 already attached). The socket is
 accepted before a refusal is closed, with the close code and the reason name as the close text.
 
+Console certificate (1.18.53, C4): the Console connect also carries X-Tectac-Console-Cert and X-Tectac-Console-Proof. probe_tunnel.console_open checks them
+(the certificate, the proof, the person) before the account checks and signs a server proof with the CA key; the socket is accepted with that proof in
+X-Tectac-Server-Proof and only then. Every certificate refusal closes 4401 with the reason as the close text, counts against the address and writes
+one console-cert-refused row (never the probe-tunnel-refused row). The 5-second tick also ends the session at the certificate's end (certificate_expired)
+and when a revoke or CA-replacement marker exists (certificate_revoked, ca_replaced); the 5-minute re-check re-reads the certificate row.
+
 The Console consumer is the session's clock: only DATA frames reset the tunnel's idle timer and add payload bytes to bytes_up (Console to
 probe) or bytes_down (probe to Console); a watcher ends the session at the idle limit and the hard cap and re-checks the account every 5
 minutes. Only the engineer's own DATA frames (Console to probe) are passed to the sign-in as activity (rule 1.8, AD-35); output from the target
@@ -58,10 +64,10 @@ CLOSE_CODE_FOR = {"protocol_error": tun.CLOSE_PROTOCOL, "server_restart": tun.CL
 SERVER_GOING_AWAY_CODES = (1001, 1012)  # what an ASGI server sends when it shuts down
 
 
-def _console_open_job(ticket):
+def _console_open_job(ticket, headers=None, host=None):
     pt._close_db(False)
     try:
-        return tun.console_open(ticket)
+        return tun.console_open(ticket, headers, host)
     finally:
         pt._close_db(True)
 
@@ -583,6 +589,9 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         self._next_recheck = 0.0
         self._identity_ok_at = 0.0
         self._access_seen = 0.0  # the newest access marker this socket has acted on (1.18.50)
+        self._cert_serial = None  # 1.18.53: the certificate this Console connected with, its end (epoch) and the CA that signed it
+        self._cert_not_after = None
+        self._cert_server_id = None
 
     async def _connect_inner(self):
         if not await self._gate():
@@ -593,14 +602,26 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
             await self._refuse(pt.CLOSE_UNAUTHORIZED, reason)
             return
         self._access_seen = self._wall() - 1  # before the open decision reads anything: a change after this instant starts a re-check
+        headers, host = tun.parse_console_headers(self.scope), tun.console_host(self.scope)
         try:
-            status, value, record, why = await asyncio.wait_for(pt.run_in_pool("auth", _console_open_job, ticket), timeout=pt.AUTH_TIMEOUT_SECONDS)
+            status, value, record, why = await asyncio.wait_for(pt.run_in_pool("auth", _console_open_job, ticket, headers, host), timeout=pt.AUTH_TIMEOUT_SECONDS)
         except pt.PoolFull:
             await self._unavailable("busy")
             return
         except Exception:
             logger.debug("A call failed and was handled (see the caller).", exc_info=True)
             await self._unavailable("unavailable")
+            return
+        if status == "certificate":  # 1.18.53: the seven certificate reasons write only their own row
+            await self._cache_call(pt.note_failure, self._ip)
+            if value:
+                self.session_id = value.get("session_id")
+            await self._refuse(pt.CLOSE_UNAUTHORIZED, why, audit=False)
+            await self._audit_certificate_refusal(why, value)
+            return
+        if status == "key_unavailable":  # the CA key cannot sign: a server fault, the ticket is burnt, nothing is counted
+            self.session_id = (value or {}).get("session_id")
+            await self._unavailable(why, (value or {}).get("probe_id"))
             return
         if status in ("ticket", "unauthorized"):
             await self._cache_call(pt.note_failure, self._ip)
@@ -615,7 +636,13 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         self.session_id, self.probe_id, self._record, self._value = value["session_id"], value["probe_id"], record, value
         self._group = tun.tunnel_group(self.session_id)
         self._idle_s, self._cap_s = int(record["idle_s"]), int(record["cap_s"])
-        await self.accept()
+        server_proof = self._value.pop("server_proof", None)  # public, but never kept: it is for this accept only
+        self._cert_serial, self._cert_not_after, self._cert_server_id = (
+            self._value.get("cert_serial"), self._value.get("cert_not_after"), self._value.get("cert_server_id"))
+        if isinstance(server_proof, str) and server_proof:
+            await self.accept(headers=[(tun.SERVER_PROOF_HEADER, server_proof.encode("ascii"))])
+        else:
+            await self.accept()
         self._attached = True
         await self.channel_layer.group_add(self._group, self.channel_name)
         now = self._clock()
@@ -627,9 +654,21 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         # Join the group first, then mark, tell and look at the probe's marker: a probe that joins in between still sends tunnel.paired here.
         if not await self._announce_ready(tun.mark_console_ready, tun.SIDE_PROBE_READY):
             return
-        self._spawn(self._audit("custom:probe-tunnel-connect", probe_id=self.probe_id, ip=self._ip,
-                                extra={"session_id": self.session_id, "side": "console", "engineer": self._value["user_id"]}))
+        extra = {"session_id": self.session_id, "side": "console", "engineer": self._value["user_id"]}
+        if self._cert_serial:
+            extra["cert_serial"] = self._cert_serial
+        self._spawn(self._audit("custom:probe-tunnel-connect", probe_id=self.probe_id, ip=self._ip, extra=extra))
         self._watch = asyncio.ensure_future(self._watch_loop())
+
+    async def _audit_certificate_refusal(self, reason, value):
+        """The one console-cert-refused row (a serial only when it parsed to 32 hex; never a ticket, a certificate or a proof)."""
+        value = value or {}
+        try:
+            await pt.run_in_pool("audit", tun.record_certificate_refusal, reason, self._ip, value.get("session_id"), value.get("user_id"), value.get("cert_serial"))
+        except pt.PoolFull:
+            self._throttled_log("audit_full", "The probe audit pool is full; an audit row was not written.")
+        except Exception:
+            logger.warning("The Console certificate refusal row could not be written.", exc_info=True)
 
     async def disconnect(self, close_code):
         watch, self._watch = self._watch, None
@@ -703,6 +742,16 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
             if marker:
                 self._ended_local = True
                 await self._close_with(marker.get("reason") or "ended_by_core")
+                return False
+        # 1.18.53: the certificate. Its end, then one get_many for the revoke and CA-replacement markers (a fault reads as none: the 5-minute
+        # re-check is the backstop).
+        if self._cert_serial:
+            if isinstance(self._cert_not_after, (int, float)) and self._wall() >= self._cert_not_after:
+                await self._end("ended_by_core", detail="certificate_expired")
+                return False
+            why = await self._cache_call(tun.certificate_end_reason, self._cert_serial, self._cert_server_id, default=None)
+            if why:
+                await self._end("ended_by_core", detail=why)
                 return False
         # 1.18.50: one cache read a tick. A newer access marker for this person (a role, scope or account change, or the owner moving the probe
         # to another site) brings the re-check forward to this tick; the re-check then decides, so a change that touches nothing ends nothing.

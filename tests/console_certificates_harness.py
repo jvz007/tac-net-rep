@@ -50,6 +50,12 @@ class _LogCapture(logging.Handler):
         self.lines.append(text)
 
 
+class KnoxToken:
+    """A Knox token reduced to what the routes read: a digest (1.18.53: the routes that start an enrolment need an interactive session)."""
+
+    digest = "knox-digest-for-tests"
+
+
 class Console:
     """A stand-in for the Engineer Console: a P-256 key pair and the proof it signs."""
 
@@ -73,6 +79,17 @@ class Console:
         message = (f"tectac-console-enrol-v1\nhost={host}\ncode={hashlib.sha256(code.encode()).hexdigest()}\nkey={spki_hash or self.spki_hash}").encode()
         r, s = decode_dss_signature((key or self.key).sign(message, ec.ECDSA(hashes.SHA256())))
         return b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+
+    def connect_proof(self, host: str, server_id: str, ticket: str, serial: str, time_text: str, nonce: str, key=None) -> str:
+        """The v1.<time>.<nonce>.<sig> value of X-Tectac-Console-Proof (1.18.53), written out here byte by byte so a test pins Core's message."""
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+        message = ("tectac-console-connect-v1\n" f"host={host}\nserver={server_id}\nticket={hashlib.sha256(ticket.encode()).hexdigest()}\n"
+                   f"serial={serial}\ntime={time_text}\nnonce={nonce}").encode()
+        r, s = decode_dss_signature((key or self.key).sign(message, ec.ECDSA(hashes.SHA256())))
+        return f"v1.{time_text}.{nonce}.{b64u(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
 
     def body(self, code: str, host: str = HOST, pc_label: str = "Work PC", **override) -> dict:
         body = {"v": 1, "public_key": self.public_key, "pc_label": pc_label, "proof": self.proof(host, code)}
@@ -141,6 +158,20 @@ def boot():
     stub("accounts.models", Role=type("Role", (), {}))
     stub("tec_tac.registry", get_plugins=lambda: ())
     stub("tec_tac.session_security", SessionAuthenticated=type("SessionAuthenticated", (IsAuthenticated,), {}))
+    h.tunnel_calls, h.tunnel_fault = [], [False]
+
+    def tunnel_call(name):
+        def call_it(arg):
+            from django.db import connection as db_connection
+
+            h.tunnel_calls.append((name, arg, db_connection.in_atomic_block))  # in_atomic_block must be False: the hook runs after the commit
+            if h.tunnel_fault[0]:
+                raise RuntimeError("the tunnel layer is down")
+            return []
+
+        return call_it
+
+    stub("tec_tac.probe_tunnel", certificate_revoked=tunnel_call("certificate_revoked"), ca_replaced=tunnel_call("ca_replaced"))
 
     from tec_tac import audit, console_certificate_views, console_certificates, models, rbac, secret_store
 
@@ -215,6 +246,8 @@ def boot():
         h.user_flags.clear()
         h.rows.clear()
         h.logs.clear()
+        h.tunnel_calls.clear()
+        h.tunnel_fault[0] = False
         h.fail_audit = False
         h.fail_actions.clear()
         h.master_fault = None
@@ -222,7 +255,11 @@ def boot():
 
     factory = APIRequestFactory()
 
-    def call(view, method, path, user=None, data=None, url_kwargs=None, query="", **extra):
+    def call(view, method, path, user=None, data=None, url_kwargs=None, query="", auth="knox", **extra):
+        """auth: knox (the default: a Knox-like token with a digest), api (an API-key request: a string token and an X-API-KEY header), session
+        (no token, like a plain Django session) or any object, passed as the token."""
+        if auth == "api":
+            extra.setdefault("HTTP_X_API_KEY", "api-key-for-tests")
         extra.setdefault("HTTP_HOST", HOST)
         extra.setdefault("REMOTE_ADDR", IP)
         maker = getattr(factory, method.lower())
@@ -233,7 +270,8 @@ def boot():
         else:
             request = maker(path, data=data if data is not None else {}, format="json", **extra)
         if user is not None:
-            force_authenticate(request, user=user)
+            token = KnoxToken() if auth == "knox" else ("api-key-for-tests" if auth == "api" else (None if auth == "session" else auth))
+            force_authenticate(request, user=user, token=token)
         response = view.as_view()(request, **(url_kwargs or {}))
         return response
 

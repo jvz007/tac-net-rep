@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.18.47 regression: the contract core.probe_transport 1.2.0 (1.18.50: set_tunnel_site added; first written for 1.1.0: the five 1.0.0 operations unchanged, and issue_tunnel_ticket, end_tunnel,
+"""1.18.47 regression: the contract core.probe_transport 1.3.0 (1.18.53: the Console certificate, additive; 1.18.50: set_tunnel_site added; first written for 1.1.0: the five 1.0.0 operations unchanged, and issue_tunnel_ticket, end_tunnel,
 end_tunnels_for_probe, tunnel_status added; the 1.18.46 contract test, updated).
 
 Covered (the real probe_transport.py under the stubs of tests/probe_transport_harness.py; contracts.py and audit.py need Django, so their
@@ -33,10 +33,14 @@ TUNNEL_OPERATIONS_1_2_0 = ["set_tunnel_site"]
 OPERATIONS = OPERATIONS_1_0_0 + TUNNEL_OPERATIONS + TUNNEL_OPERATIONS_1_2_0
 tun = H.tun
 meta = pt.probe_transport_contract_metadata()
-must(meta["id"] == "core.probe_transport" and meta["version"] == "1.2.0" and pt.CAPABILITY_VERSION == "1.2.0", "id and version")
+must(meta["id"] == "core.probe_transport" and meta["version"] == "1.3.0" and pt.CAPABILITY_VERSION == "1.3.0", "id and version")
 must(len(OPERATIONS) == 10 and list(pt.OPERATIONS) == OPERATIONS, "ten operations")
 must("1.1.0 (Core 1.18.47, framework >=1.18.47)" in meta["added_in"] and "1.0.0 (Core 1.18.46)" in meta["added_in"] and "Additive" in meta["added_in"], meta["added_in"])
 must("1.2.0 (Core 1.18.50, framework >=1.18.50)" in meta["added_in"], meta["added_in"])
+must("1.3.0 (Core 1.18.53, framework >=1.18.53)" in meta["added_in"] and "console_certificate_required" in meta["added_in"], meta["added_in"])
+must("console_certificate_required" in meta["operations_detail"]["issue_tunnel_ticket"], "the new denied code is in the operation text")
+must("X-Tectac-Console-Cert" in meta["tunnel"]["routes"]["console"] and "certificate_engineer_mismatch" in meta["tunnel"]["close_codes"]["4401"], "the Console headers and the seven reasons")
+must("cert_serial" in meta["tunnel"]["audit"] and "custom:console-cert-refused" in meta["tunnel"]["audit"], "the audit text")
 tunnel = meta["tunnel"]
 must(tunnel["close_reasons"] == list(tun.ALL_REASONS) and len(tun.END_REASONS) == 14, "the fixed reason list")
 must(tunnel["limits"]["sessions"] == 50 and tunnel["limits"]["sessions_per_probe"] == 5 and tunnel["limits"]["sessions_per_engineer"] == 3
@@ -95,7 +99,7 @@ sys.modules["tec_tac.capabilities"] = stub_caps
 pt.register_core_probe_transport_capability()
 must(len(registered) == 1, registered)
 cap = registered[0]
-must(cap["id"] == "core.probe_transport" and cap["module_id"] == "core" and cap["version"] == "1.2.0", cap["id"])
+must(cap["id"] == "core.probe_transport" and cap["module_id"] == "core" and cap["version"] == "1.3.0", cap["id"])
 must(list(cap["operations"]) == OPERATIONS and cap["metadata"] == meta, "operations and metadata")
 for name in OPERATIONS:
     must(callable(getattr(cap["provider"], name)), "the provider has " + name)

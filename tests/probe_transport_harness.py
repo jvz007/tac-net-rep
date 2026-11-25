@@ -259,6 +259,7 @@ class FakeBase:
         self.channel_name = None
         self.accepted, self.closed, self.out = False, [], []
         self.close_reasons, self.out_bytes = [], []
+        self.accept_headers = None  # 1.18.53: the headers of the last accept(headers=...), or None
 
     @classmethod
     def as_asgi(cls):
@@ -267,8 +268,9 @@ class FakeBase:
 
         return app
 
-    async def accept(self):
+    async def accept(self, subprotocol=None, headers=None):
         self.accepted = True
+        self.accept_headers = list(headers) if headers is not None else None
 
     async def close(self, code=1000, reason=None):
         self.closed.append(code)
@@ -375,6 +377,69 @@ stub("tec_tac.session_security", request_knox_digest=lambda request: getattr(req
 stub("django.contrib")
 stub("django.contrib.auth", get_user_model=lambda: SimpleNamespace(objects=_Users()))
 
+# 1.18.53: tec_tac.console_certificates (the Console certificate crypto and database logic). The tunnel files import it lazily, inside functions. The stub
+# accepts every certificate by default, so the existing tunnel tests keep their Console connects; the certificate tests set CERTS to refuse, fault or count.
+class CertRefused(Exception):
+    def __init__(self, code, serial=None):
+        super().__init__(code)
+        self.code, self.serial = code, serial
+
+
+class KeyUnavailable(Exception):
+    code = "master_key_unavailable"
+
+
+CERTS = {}
+CERT_SERIAL = "c" * 32
+CA_SERVER_ID = "a" * 32
+SERVER_PROOF = "v1." + "A" * 86
+
+
+def reset_certs():
+    CERTS.clear()
+    CERTS.update(refuse=None, key_fault=False, usable=True, usable_fault=False, recheck=None, recheck_fault=False, verify_calls=[], sign_calls=[],
+                 usable_calls=[], recheck_calls=[], touched=[], refusals=[], row_due=True, serial=CERT_SERIAL, not_after=None, server_id=CA_SERVER_ID)
+
+
+def _verify_connect(cert_der, proof, ticket, host, user_id, now=None):
+    CERTS["verify_calls"].append({"cert": cert_der, "proof": dict(proof), "ticket": ticket, "host": host, "user_id": user_id})
+    if CERTS["refuse"]:
+        raise CertRefused(*CERTS["refuse"])
+    return {"serial": CERTS["serial"], "not_after": CERTS["not_after"], "server_id": CERTS["server_id"], "ca": object()}
+
+
+def _sign_server_proof(verified, host, ticket, nonce):
+    CERTS["sign_calls"].append((verified["serial"], host, nonce))
+    if CERTS["key_fault"]:
+        raise KeyUnavailable("the CA key cannot sign")
+    return SERVER_PROOF
+
+
+def _has_usable_certificate(user_id, now=None):
+    CERTS["usable_calls"].append(user_id)
+    if CERTS["usable_fault"]:
+        raise RuntimeError("database down")
+    return CERTS["usable"]
+
+
+def _recheck(serial, now=None):
+    CERTS["recheck_calls"].append(serial)
+    if CERTS["recheck_fault"]:
+        raise RuntimeError("database down")
+    return CERTS["recheck"]
+
+
+def _record_refusal(reason, ip, *, session_id=None, engineer_id=None, serial=None):
+    if not CERTS["row_due"]:
+        return False
+    CERTS["refusals"].append({"reason": reason, "ip": ip, "session_id": session_id, "engineer_id": engineer_id, "serial": serial})
+    return True
+
+
+stub("tec_tac.console_certificates", verify_connect=_verify_connect, sign_server_proof=_sign_server_proof, has_usable_certificate=_has_usable_certificate,
+     recheck=_recheck, record_refusal=_record_refusal, touch_last_used=lambda serial, now=None: CERTS["touched"].append(serial))
+reset_certs()
+
 # the stub package: real files, lazily imported collaborators are the stubs above
 package = sys.modules.get("tec_tac") or types.ModuleType("tec_tac")
 package.__path__ = [str(APP)]
@@ -424,6 +489,7 @@ def reset():
     USERS.clear()
     USERS[ENGINEER] = SimpleNamespace(pk=ENGINEER, is_active=True)
     SITES.update(visible={ENGINEER: {7}}, mode="normal", calls=[])  # the engineer sees site 7, the site add_probe gives the probe
+    reset_certs()
     TXN.in_atomic_block = False
     TXN.pending.clear()
     ae._access_changed.receivers.clear()
@@ -548,10 +614,26 @@ def issue(spec=None, request=None):
     return pt.issue_tunnel_ticket(request if request is not None else engineer_request(), "networkprobe", spec)
 
 
-def ticket_headers(ticket, real_ip="203.0.113.50", scheme="Ticket", extra=()):
+def b64u_text(raw: bytes) -> str:
+    import base64
+
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def cert_header_rows(der=b"\x30\x82" + b"D" * 120, time=None, nonce=None, sig=None):
+    """The two Console certificate headers of a well-formed connect (1.18.53). The values are well shaped only: the stub accepts any certificate."""
+    stamp = str(int(WALL[0] if time is None else time))
+    value = f"v1.{stamp}.{nonce or b64u_text(b'n' * 16)}.{sig or b64u_text(b's' * 64)}"
+    return [(b"x-tectac-console-cert", b64u_text(der).encode()), (b"x-tectac-console-proof", value.encode())]
+
+
+def ticket_headers(ticket, real_ip="203.0.113.50", scheme="Ticket", extra=(), certificate=True):
     rows = [(b"authorization", f"{scheme} {ticket}".encode())]
     if real_ip:
         rows.append((b"x-real-ip", real_ip.encode()))
+    if certificate:  # 1.18.53: every Console connect carries the certificate headers and the Host header
+        rows.extend(cert_header_rows())
+        rows.append((b"host", b"tec.example.com"))
     rows.extend(extra)
     return rows
 

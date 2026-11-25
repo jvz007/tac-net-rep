@@ -88,11 +88,19 @@ must("RecursionError" in fleet, "the nested-frame note")
 
 # ---------------------------------------------------------------- capabilities.md
 section = caps[caps.index("## Core probe transport"):caps.index("## Core agent downloads")]
-must("`core.probe_transport` 1.2.0" in section and ">=1.18.50" in section and "docs/probe-transport.md" in section and ">=1.18.47" in section and ">=1.18.46" in section, "the capabilities section")
+must("`core.probe_transport` 1.3.0" in section and ">=1.18.53" in section and "`console_certificate_required`" in section and ">=1.18.50" in section and "docs/probe-transport.md" in section and ">=1.18.47" in section and ">=1.18.46" in section, "the capabilities section")
 for operation in meta["operations"]:
     must(f"`{operation}`" in section, "the capabilities section names " + operation)
 must("/ws/tfd/probe-tunnel/" in section and "/ws/tfd/network-probe/tunnel/" in section, "the capabilities section names the routes")
 must("\r\n" in caps and caps.count("\n") == caps.count("\r\n"), "capabilities.md stays CRLF")
+# 1.18.53: the Console certificate section of the tunnel docs names every reason, header and audit name in the code
+cert = doc[doc.index("### Console certificates (1.3.0)"):doc.index("### Frames")]
+for reason in tun.CERT_REASONS:
+    must(f"`{reason}`" in cert, "the certificate section names " + reason)
+for needle in ("X-Tectac-Console-Cert", "X-Tectac-Console-Proof", "X-Tectac-Server-Proof", "console_certificate_required", "custom:console-cert-refused", "cert_serial",
+               "`certificate_revoked`, `certificate_expired` or `ca_replaced`", "framework 1.18.53 or later", "120 seconds", "docs/console-certificates.md"):
+    must(needle in cert, needle)
+must(all(f"`{reason}`" in doc.split("### Close codes")[1] for reason in tun.CERT_REASONS), "the close-code table names the seven reasons")
 
 for label, text in (("probe-transport.md", doc), ("capabilities section", section)):
     lowered = text.lower()

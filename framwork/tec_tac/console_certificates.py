@@ -4,12 +4,13 @@ A certificate is a small signed file that says "this key belongs to this enginee
 pair whose private half signs every Console certificate. An engineer's Console makes its own key pair, proves it holds the private half, and
 Core signs the public half. The private key never leaves the engineer's PC.
 
-C3 builds the CA, the certificate, the enrolment and the management routes. It does NOT yet protect the tunnel: until Core 1.18.53 (C4) a
-tunnel does not check a certificate, so a revoked or missing certificate stops nothing that is already open or opening. See
-docs/console-certificates.md ("Not enforced yet").
+C3 (1.18.52) built the CA, the certificate, the enrolment and the management routes. C4 (1.18.53) makes the certificate the tunnel
+credential: every Console connect carries the certificate and a proof signed with its key (``verify_connect``), Core answers with a server
+proof signed with the CA key (``sign_server_proof``), the certificate is re-read every 5 minutes (``recheck``), and a revoke or a CA
+replacement ends the live sessions (the after-commit hooks call probe_tunnel). See docs/console-certificates.md.
 
 This file is pure logic. It has no DRF and imports ``cryptography``, Django's models and the secret store lazily inside functions, so a
-fault there can never stop Tactical from starting (rule 1.13). ``console_certificate_views`` is the only caller.
+fault there can never stop Tactical from starting (rule 1.13). ``console_certificate_views`` and ``probe_tunnel`` (lazily) call it.
 
 The CA private key. 32 bytes of master key from the secret store encrypts it (AES-256-GCM, the secret store's own private helpers, scope
 ``core:console-ca``, name ``ca-key:<server_id>``) and only the encrypted blob is stored (table ``core_console_ca``). It is decrypted in memory
@@ -64,6 +65,14 @@ _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 
 REVOKE_REASONS = ("lost", "left", "admin", "other")
 ENROL_KEYS = frozenset({"v", "public_key", "pc_label", "proof"})
+
+# C4 (1.18.53): the tunnel connect
+CONNECT_PREFIX = b"tectac-console-connect-v1\n"
+SERVER_PROOF_PREFIX = b"tectac-core-connect-v1\n"
+PROOF_WINDOW_SECONDS = 120
+LAST_USED_SECONDS = 3600
+CERT_REASONS = ("certificate_required", "certificate_invalid", "certificate_expired", "certificate_revoked", "certificate_engineer_mismatch",
+                "proof_invalid", "proof_stale")
 
 
 class ConsoleCertError(Exception):
@@ -127,6 +136,29 @@ def _audit(actor, action, object_type, object_id, message, metadata=None, *, str
     except Exception:
         logger.warning("A Console certificate audit row could not be written (%s).", action, exc_info=True)
         return None
+
+
+def _tunnel():
+    from . import probe_tunnel
+
+    return probe_tunnel
+
+
+def _after_commit(label: str, call) -> None:
+    """Run ``call`` once the surrounding transaction has committed (at once outside one). A fault is logged and never undoes or blocks the
+    change: the database row is the authority, the live end is best effort and backed by a marker and the 5-minute re-check."""
+    from django.db import transaction
+
+    def run():
+        try:
+            call()
+        except Exception:
+            logger.warning("Ending the live tunnel sessions after a Console certificate change failed (%s); the re-check will end them.", label, exc_info=True)
+
+    try:
+        transaction.on_commit(run)
+    except Exception:
+        logger.warning("The live tunnel end after a Console certificate change could not be scheduled (%s).", label, exc_info=True)
 
 
 def service_actor():
@@ -329,8 +361,8 @@ def ensure_ca(actor=None):
 
 def replace_ca(user):
     """Retire the active CA, make a new one, revoke every active certificate of the old CA (reason ca_replaced), cancel every open enrolment
-    and write one strict row with the counts. The old CA is kept, retired. Effective superusers only (the view checks). Tunnels already open
-    are not ended in C3 (they do not check certificates until C4)."""
+    and write one strict row with the counts. The old CA is kept, retired. Effective superusers only (the view checks). Since 1.18.53 every live
+    tunnel session ends (ca_replaced) once the change is committed."""
     from django.db import transaction
 
     models = _models()
@@ -353,13 +385,16 @@ def replace_ca(user):
         _audit(user, "custom:console-ca-replaced", "console_ca", new.server_id, "The Engineer Console certificate authority was replaced.",
                {"old_server_id": old.server_id, "new_server_id": new.server_id, "revoked_certificates": revoked, "cancelled_enrolments": cancelled,
                 "not_after": new.not_after.isoformat()})
+        old_server_id = old.server_id
+        _after_commit("ca_replaced", lambda: _tunnel().ca_replaced(old_server_id))
     return {"server_id": new.server_id, "old_server_id": old.server_id, "not_after": new.not_after, "revoked_certificates": revoked,
             "cancelled_enrolments": cancelled}
 
 
-def _sign(ca, builder):
-    """Sign a certificate builder with the CA key. The key is decrypted here, in memory, and goes out of scope when this returns."""
-    from cryptography.hazmat.primitives import hashes, serialization
+def _with_ca_key(ca, use):
+    """Call ``use(private key)`` and return its result. The key is decrypted here, in memory, and goes out of scope when this returns. It is the
+    only place the CA key is decrypted: ``_sign`` (certificates) and ``sign_server_proof`` (the tunnel connect) both go through it."""
+    from cryptography.hazmat.primitives import serialization
 
     store = _store()
     master = store._load_master_key()
@@ -368,9 +403,16 @@ def _sign(ca, builder):
             raise ValueError("key id differs")
         plain = store._decrypt(master, store._Scope(SCOPE_NAME), f"ca-key:{ca.server_id}", bytes(ca.key_blob))
         key = serialization.load_der_private_key(plain, password=None)
-        return builder.sign(key, hashes.SHA256())
+        return use(key)
     except Exception:
         raise _unavailable("ca_key_unreadable") from None
+
+
+def _sign(ca, builder):
+    """Sign a certificate builder with the CA key."""
+    from cryptography.hazmat.primitives import hashes
+
+    return _with_ca_key(ca, lambda key: builder.sign(key, hashes.SHA256()))
 
 
 # ------------------------------------------------------------------------------------------------ certificates
@@ -470,6 +512,8 @@ def _revoke_row(cert, by, reason: str, now, actor, extra: dict | None = None) ->
     if extra:
         metadata.update(extra)
     _audit(actor, "custom:console-cert-revoked", "console_certificate", cert.serial, "An Engineer Console certificate was revoked.", metadata)
+    serial = cert.serial
+    _after_commit("certificate_revoked", lambda: _tunnel().certificate_revoked(serial))
     return True
 
 
@@ -897,3 +941,178 @@ def ca_status() -> dict:
         })
     return out
 
+
+
+# ------------------------------------------------------------------------------------------------ the tunnel connect (1.18.53, C4)
+class ConnectRefused(ConsoleCertError):
+    """A refused tunnel connect. ``code`` is one of CERT_REASONS (the websocket close text). ``serial`` is set when the certificate parsed to a
+    32 hex serial, for the refusal row."""
+
+    def __init__(self, code: str, serial: str | None = None):
+        super().__init__(code, code, 401)
+        self.serial = serial
+
+
+def ticket_hash(ticket: str) -> str:
+    """SHA-256 of the 43 ASCII ticket characters, lower-case hex. The only form of a ticket that reaches a message."""
+    return hashlib.sha256(str(ticket).encode("ascii")).hexdigest()
+
+
+def connect_message(host: str, server_id: str, ticket: str, serial: str, time_text: str, nonce: str) -> bytes:
+    """The exact bytes the Console signs on a tunnel connect: lines joined by one LF, no trailing LF."""
+    return CONNECT_PREFIX + f"host={host}\nserver={server_id}\nticket={ticket_hash(ticket)}\nserial={serial}\ntime={time_text}\nnonce={nonce}".encode("ascii")
+
+
+def server_proof_message(host: str, server_id: str, ticket: str, serial: str, nonce: str) -> bytes:
+    """The exact bytes Core signs with the CA key and sends back in X-Tectac-Server-Proof."""
+    return SERVER_PROOF_PREFIX + f"host={host}\nserver={server_id}\nticket={ticket_hash(ticket)}\nserial={serial}\nnonce={nonce}".encode("ascii")
+
+
+def _p1363(der_signature: bytes) -> bytes:
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    r, s = decode_dss_signature(der_signature)
+    return r.to_bytes(32, "big") + s.to_bytes(32, "big")
+
+
+def _verify_p1363(public_key, raw: bytes, message: bytes) -> bool:
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    if len(raw) != 64:
+        return False
+    try:
+        public_key.verify(encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")), message, ec.ECDSA(hashes.SHA256()))
+    except (InvalidSignature, ValueError):
+        return False
+    return True
+
+
+def verify_connect(cert_der, proof: dict, ticket: str, host, user_id: int, now=None) -> dict:
+    """Every certificate check of one Console connect, in the documented order. ``proof`` is {time, nonce, sig} as the headers carried them
+    (shape already checked). Raises ConnectRefused(reason) for a refusal; a database fault is raised as it is (the caller answers 1013).
+    Returns {serial, not_after (epoch seconds), server_id, ca}: ``ca`` is the active CA row, for ``sign_server_proof``."""
+    from cryptography import x509
+    from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    now = now or _now()
+    if abs(now.timestamp() - int(proof["time"])) > PROOF_WINDOW_SECONDS:
+        raise ConnectRefused("proof_stale")
+    der = bytes(cert_der)
+    try:
+        cert = x509.load_der_x509_certificate(der)
+        serial = format(cert.serial_number, "032x")
+    except (ValueError, TypeError):
+        raise ConnectRefused("certificate_invalid") from None
+    known = serial if SERIAL_PATTERN.fullmatch(serial) else None
+    ca = active_ca()
+    if ca is None:
+        raise ConnectRefused("certificate_invalid", known)
+    try:
+        ca_cert = x509.load_der_x509_certificate(bytes(ca.cert_der))
+        if cert.issuer != ca_cert.subject:
+            raise ValueError("issuer")
+        ca_cert.public_key().verify(cert.signature, cert.tbs_certificate_bytes, ec.ECDSA(cert.signature_hash_algorithm))
+        public_key = cert.public_key()
+        if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(public_key.curve, ec.SECP256R1):
+            raise TypeError("key")
+        spki_hash = hashlib.sha256(_spki_der(public_key)).hexdigest()
+    except (InvalidSignature, UnsupportedAlgorithm, ValueError, TypeError):
+        raise ConnectRefused("certificate_invalid", known) from None
+    row = _models().TecTacConsoleCertificate.objects.filter(serial=known).first() if known else None
+    if row is None or bytes(row.cert_der) != der or row.spki_sha256 != spki_hash or row.ca_id != ca.pk:
+        raise ConnectRefused("certificate_invalid", known)
+    if row.state == "revoked":
+        raise ConnectRefused("certificate_revoked", known)
+    if row.not_after <= now:
+        raise ConnectRefused("certificate_expired", known)
+    if row.not_before > now:
+        raise ConnectRefused("certificate_invalid", known)
+    if row.user_id != user_id:
+        raise ConnectRefused("certificate_engineer_mismatch", known)
+    signature = b64u_decode(proof["sig"], max_chars=100)
+    if not isinstance(host, str) or not HOST_PATTERN.fullmatch(host) or signature is None:
+        raise ConnectRefused("proof_invalid", known)
+    if not _verify_p1363(public_key, signature, connect_message(host, ca.server_id, ticket, serial, proof["time"], proof["nonce"])):
+        raise ConnectRefused("proof_invalid", known)
+    return {"serial": serial, "not_after": row.not_after.timestamp(), "server_id": ca.server_id, "ca": ca}
+
+
+def sign_server_proof(verified: dict, host: str, ticket: str, nonce: str) -> str:
+    """The value of X-Tectac-Server-Proof: ``v1.`` and base64url of the 64-byte r||s signature of the CA key. The key is decrypted inside
+    ``_with_ca_key`` only. An unreadable master key raises the secret store's master_key_unavailable."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    message = server_proof_message(host, verified["server_id"], ticket, verified["serial"], nonce)
+    raw = _with_ca_key(verified["ca"], lambda key: _p1363(key.sign(message, ec.ECDSA(hashes.SHA256()))))
+    return "v1." + b64u(raw)
+
+
+def touch_last_used(serial: str, now=None) -> None:
+    """Fill ``last_used_at`` at most once an hour: one conditional UPDATE. A fault is logged and never fatal."""
+    from django.db.models import Q
+
+    now = now or _now()
+    try:
+        _models().TecTacConsoleCertificate.objects.filter(serial=serial).filter(
+            Q(last_used_at__isnull=True) | Q(last_used_at__lt=now - timedelta(seconds=LAST_USED_SECONDS))).update(last_used_at=now)
+    except Exception:
+        logger.warning("The Console certificate last-used time could not be written.", exc_info=True)
+
+
+def has_usable_certificate(user_id: int, now=None) -> bool:
+    """True when the person holds at least one active, unexpired certificate of the active CA (one indexed read). A fault is raised."""
+    now = now or _now()
+    return _active_unexpired(user_id, now).filter(ca__state="active").exists()
+
+
+def recheck(serial: str, now=None) -> str | None:
+    """The 5-minute re-read of one certificate row: ``certificate_revoked`` when it is no longer active or its CA is no longer the active CA,
+    ``certificate_expired`` past its end, else None. A fault is raised (the caller applies the re-check's fault rule)."""
+    now = now or _now()
+    row = _models().TecTacConsoleCertificate.objects.filter(serial=serial).select_related("ca").first()
+    if row is None or row.state != "active" or row.ca.state != "active":
+        return "certificate_revoked"
+    if row.not_after <= now:
+        return "certificate_expired"
+    return None
+
+
+def record_refusal(reason: str, ip: str, *, session_id=None, engineer_id=None, serial=None) -> bool:
+    """The one non-strict ``custom:console-cert-refused`` row of a refused Console connect, at most one per address per minute. Holds a reason,
+    the address, the session id, the engineer id and (only when it parsed to 32 hex) a serial. Never a ticket, a certificate, a proof or a
+    header. Returns True when a row was written."""
+    if not _refusal_row_due(ip):
+        return False
+    metadata = {"reason": reason, "ip": ip}
+    if isinstance(session_id, str) and session_id:
+        metadata["session_id"] = session_id[:64]
+    if isinstance(engineer_id, int) and not isinstance(engineer_id, bool):
+        metadata["engineer_id"] = engineer_id
+    safe_serial = serial if isinstance(serial, str) and SERIAL_PATTERN.fullmatch(serial) else None
+    if safe_serial:
+        metadata["serial"] = safe_serial
+    _audit(service_actor(), "custom:console-cert-refused", "console_certificate", safe_serial, "An Engineer Console connect was refused.", metadata,
+           strict=False, refusal=True)
+    return True
+
+
+# ------------------------------------------------------------------------------------------------ API keys (1.18.53)
+def interactive_session(request) -> bool:
+    """True only for a person who signed in interactively: the request's auth is a Knox token with a digest, it was not made by Tactical's
+    API-key authenticator and it carries no X-API-KEY header. Pure logic on the request (no session_security import). The enrolment-code,
+    issue and CA-replace routes refuse everything else, so an API key can never start a Console enrolment."""
+    auth = getattr(request, "auth", None)
+    if auth is None or isinstance(auth, (str, bytes)) or not getattr(auth, "digest", None):
+        return False
+    authenticator = getattr(request, "successful_authenticator", None)
+    if authenticator is not None:
+        kind = type(authenticator)
+        if kind.__name__ == "APIAuthentication" or getattr(kind, "__module__", "") == "tacticalrmm.auth":
+            return False
+    meta = getattr(request, "META", None) or {}
+    return "HTTP_X_API_KEY" not in meta

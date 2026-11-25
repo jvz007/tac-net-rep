@@ -1,5 +1,6 @@
 """Core's Network Probe tunnel (Core 1.18.47, C2 of the probe channel plan): the Console ticket, the session limits, the two data routes' shared
-state and the end of a session. Part of the contract core.probe_transport (1.1.0 since Core 1.18.47, 1.2.0 since Core 1.18.50).
+state and the end of a session. Part of the contract core.probe_transport (1.1.0 since Core 1.18.47, 1.2.0 since Core 1.18.50, 1.3.0 since
+Core 1.18.53: the Console certificate, see docs/console-certificates.md).
 
 An engineer's Console (a native desktop tool) and a Network Probe each open one binary websocket to Core. Core relays the frames between the
 two and nothing else: it reads byte 0 (the type) and the length, counts DATA bytes and never looks at stream ids, windows or payloads. It never
@@ -14,9 +15,16 @@ its own group prefix (tectac-pnt-) and its own audit actions (custom:probe-tunne
 
 Secrets: a ticket exists in clear text only in the answer of issue_tunnel_ticket and in the Authorization header of the Console's connection. The
 cache holds its SHA-256. It is never in a log line, an audit row, a refusal text or a status result. A probe key is never held here.
+
+Console certificate (1.18.53, C4): the Console side connects only with its certificate and a proof signed with the certificate's key (two more
+headers); Core answers with a server proof signed with the CA key. The crypto and the database reads are in console_certificates, imported
+lazily inside the functions below (rule 1.13: no module-level import of it, of ``cryptography`` or of a model). A revoked certificate or a
+replaced CA ends the live sessions at once (end_for_certificate, end_all_sessions) and, as a backstop, through a cache marker each Console
+socket reads in its 5-second tick.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import re
@@ -49,11 +57,24 @@ STATS_PREFIX = "tec-tac:pt:tunstat:"
 CLOSED_PREFIX = "tec-tac:pt:tunclosed:"
 AUDITED_PREFIX = "tec-tac:pt:tunaudit:"
 TICKET_RATE_PREFIX = "tec-tac:pt:tkrate:"
+CERT_REVOKED_PREFIX = "tec-tac:pt:certrev:"  # 1.18.53: <serial>, written after a revoke commits; each Console socket reads it in its tick
+CA_REPLACED_PREFIX = "tec-tac:pt:carepl:"  # 1.18.53: <server id of the replaced CA>
+CERT_HEADER = b"x-tectac-console-cert"
+PROOF_HEADER = b"x-tectac-console-proof"
+SERVER_PROOF_HEADER = b"x-tectac-server-proof"
+CERT_HEADER_MAX_CHARS = 2048
+PROOF_HEADER_MAX_BYTES = 400
+CERT_REASONS = ("certificate_required", "certificate_invalid", "certificate_expired", "certificate_revoked", "certificate_engineer_mismatch",
+                "proof_invalid", "proof_stale")  # every one closes 4401 with the name as the close text; console_certificates.CERT_REASONS is the same list
+CERT_END_DETAILS = ("certificate_revoked", "certificate_expired", "ca_replaced")  # the end row's detail (the close reason stays ended_by_core)
+END_BUDGET_SECONDS = 10  # the most one revoke or CA replacement spends ending sessions; the marker and the tick end the rest
 
 TICKET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")  # secrets.token_urlsafe(32) is 43 characters
 CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9._!-]{1,200}$")  # a channels specific channel name; anything else is refused
 PERMISSION_PATTERN = re.compile(r"^networkprobe\.[a-z0-9_.]{1,100}$")
 HOST_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
+_B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
+PROOF_PATTERN = re.compile(r"^v1\.([0-9]{1,12})\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{86})$")
 
 TICKET_TTL_SECONDS = 60
 PENDING_SLOT_SECONDS = 75  # a slot is held from the ticket until the session ends; a pending one heals after the ticket window plus 15 seconds
@@ -123,6 +144,7 @@ REFUSAL_MESSAGES = {
     "sessions_per_engineer": "this person already holds the most tunnel sessions they may",
     "session_exists": "a ticket was already issued for this session id",
     "out_of_scope": "the person has no access to the probe's site",
+    "console_certificate_required": "this engineer has no valid Engineer Console certificate; enrol from My Account",
     "unavailable": "Core cannot issue a tunnel ticket right now; nothing was started",
     "bad_host": "the request host cannot be used in a launch link",
 }
@@ -215,6 +237,59 @@ def parse_session_header(scope) -> str | None:
         return _clean_session_id(values[0].decode("ascii"))
     except UnicodeDecodeError:
         return None
+
+
+def _b64u_strict(text, exact: int | None = None) -> bytes | None:
+    """Strict base64url without padding (the text must re-encode to itself), or None. ``exact`` is the required length in bytes. Stdlib only."""
+    if not isinstance(text, str) or not text or not _B64URL.fullmatch(text):
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    except ValueError:
+        return None
+    if exact is not None and len(raw) != exact:
+        return None
+    return raw if base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii") == text else None
+
+
+def _ascii_header(value, limit: int) -> str | None:
+    if len(value) > limit:
+        return None
+    try:
+        return value.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+
+
+def parse_console_headers(scope) -> dict:
+    """The shape of the two Console certificate headers (1.18.53), nothing more: no crypto, no database. Returns {reason, cert, time, nonce, sig}.
+    ``reason`` is None for a well-formed pair; ``cert`` is the certificate DER, ``time`` and ``nonce`` the header's own text, ``sig`` the
+    base64url text of the 64-byte signature. Either header missing is certificate_required; a certificate header that is repeated, over 2048
+    characters or not strict base64url is certificate_invalid; a proof header that is repeated, over 400 bytes or not v1.<time>.<nonce>.<sig> is
+    proof_invalid. Nothing here logs or returns a header value on a refusal."""
+    found = pt._scope_headers(scope)
+    certs, proofs = found.get(CERT_HEADER) or [], found.get(PROOF_HEADER) or []
+    if not certs or not proofs:
+        return {"reason": "certificate_required"}
+    der = _b64u_strict(_ascii_header(certs[0], CERT_HEADER_MAX_CHARS)) if len(certs) == 1 else None
+    if der is None:
+        return {"reason": "certificate_invalid"}
+    text = _ascii_header(proofs[0], PROOF_HEADER_MAX_BYTES) if len(proofs) == 1 else None
+    match = PROOF_PATTERN.fullmatch(text) if text else None
+    if match is None or _b64u_strict(match.group(2), 16) is None or _b64u_strict(match.group(3), 64) is None:
+        return {"reason": "proof_invalid"}
+    return {"reason": None, "cert": der, "time": match.group(1), "nonce": match.group(2), "sig": match.group(3)}
+
+
+def console_host(scope) -> str | None:
+    """The host the Console connected to, from exactly one Host header: lower case, ``:443`` removed, a plain host name (the launch link's rule).
+    Anything else (no header, two headers, another port, an odd name) is None, and the proof then fails closed (proof_invalid)."""
+    values = pt._scope_headers(scope).get(b"host") or []
+    if len(values) != 1:
+        return None
+    text = _ascii_header(values[0], 260)
+    host = (text or "").strip().lower().removesuffix(":443")
+    return host if HOST_PATTERN.fullmatch(host) else None
 
 
 def _clean_session_id(value) -> str | None:
@@ -336,6 +411,12 @@ def _refusal(outcome: str, code: str, *, user=None, probe_id=None, session_id=No
     return {"outcome": outcome, "code": code, "message": REFUSAL_MESSAGES.get(code, code)}
 
 
+def _certs():
+    from . import console_certificates
+
+    return console_certificates
+
+
 def _launch_url(request, ticket: str) -> str | None:
     try:
         host = str(request.get_host()).strip().lower()
@@ -441,6 +522,13 @@ def issue_ticket(request, caller: str, spec) -> dict:
         return _refusal("denied", "out_of_scope", user=user, probe_id=probe_id, session_id=sid)
     if scope:
         return _refusal("unavailable", "unavailable", user=user, probe_id=probe_id, session_id=sid)
+    try:  # 1.18.53: an early, friendly refusal (no slot, no rate budget spent); the connect check is the real gate
+        usable = bool(_certs().has_usable_certificate(user.pk))
+    except Exception:
+        logger.warning("The Console certificate could not be read for a tunnel ticket; refusing.", exc_info=True)
+        return _refusal("unavailable", "unavailable", user=user, probe_id=probe_id, session_id=sid)
+    if not usable:
+        return _refusal("denied", "console_certificate_required", user=user, probe_id=probe_id, session_id=sid)
     try:
         online = pt._connected(probe_id)
     except Exception:
@@ -531,8 +619,9 @@ def side_attached(session_id: str, side: str) -> bool:
     return _cache().get(side_key(session_id, side)) is not None
 
 
-def _attach(session_id: str, side: str) -> bool:
-    return bool(_cache().add(side_key(session_id, side), {"at": time.time()}, _keep_seconds()))
+def _attach(session_id: str, side: str, extra: dict | None = None) -> bool:
+    """Write the side's attach marker once (cache.add decides). ``extra`` is added to the marker: the Console side carries cert_serial (1.18.53)."""
+    return bool(_cache().add(side_key(session_id, side), {"at": time.time(), **(extra or {})}, _keep_seconds()))
 
 
 def account_refusal(value: dict, permission: str, activity_at=None) -> str | None:
@@ -559,13 +648,27 @@ def account_refusal(value: dict, permission: str, activity_at=None) -> str | Non
     return None
 
 
-def console_open(ticket: str):
-    """The whole Console connect decision, sync (the auth pool). Returns (status, value, record, reason): status is ok, ticket (4401:
-    unknown, used or expired), unauthorized (4401: account, permission or module; reason says which), not_pending (4404) or attached
-    (4409). A cache fault is raised."""
+def console_open(ticket: str, headers=None, host=None):
+    """The whole Console connect decision, sync (the auth pool). ``headers`` is parse_console_headers' answer, ``host`` console_host's. Returns
+    (status, value, record, reason): status is ok, certificate (4401: one of CERT_REASONS), ticket (4401: unknown, used or expired), unauthorized
+    (4401: account, permission or module; reason says which), key_unavailable (1013: the CA key cannot sign), not_pending (4404) or attached
+    (4409). A cache or database fault is raised. Order (1.18.53): the header shape (the ticket is not burnt), the ticket (burnt from here), the
+    certificate and the proof, the account, the record, the scope, the server proof, the attach marker. Without headers: certificate_required."""
+    if not isinstance(headers, dict):
+        return "certificate", None, None, "certificate_required"
+    if headers.get("reason"):
+        return "certificate", None, None, headers["reason"]
     value = redeem_ticket(ticket)
     if value is None:
         return "ticket", None, None, "ticket_invalid"
+    certs = _certs()
+    try:
+        verified = certs.verify_connect(headers["cert"], headers, ticket, host, value["user_id"])
+    except Exception as exc:
+        code = getattr(exc, "code", None)
+        if code in CERT_REASONS:
+            return "certificate", {**value, "cert_serial": getattr(exc, "serial", None)}, None, code
+        raise
     refusal = account_refusal(value, value["permission"])
     if refusal:
         return "unauthorized", value, None, refusal
@@ -575,16 +678,36 @@ def console_open(ticket: str):
     scope = scope_refusal(value["user_id"], record.get("site_id"))  # 1.18.50: the site the owner named; the person may have lost it since the ticket
     if scope:
         return "unauthorized", value, None, scope
-    if not _attach(value["session_id"], "console"):
+    try:
+        server_proof = certs.sign_server_proof(verified, host, ticket, headers["nonce"])
+    except Exception as exc:
+        if getattr(exc, "code", None) == "master_key_unavailable":
+            return "key_unavailable", value, None, "master_key_unavailable"
+        raise
+    if not _attach(value["session_id"], "console", {"cert_serial": verified["serial"]}):
         return "attached", value, record, "console_already_attached"
+    certs.touch_last_used(verified["serial"])
     extend_slot(value["session_id"], record["cap_s"] + SLOT_GRACE_SECONDS)
+    value = {**value, "cert_serial": verified["serial"], "cert_not_after": verified["not_after"], "cert_server_id": verified["server_id"],
+             "server_proof": server_proof}
     return "ok", value, record, ""
 
 
 def console_recheck(value: dict, record: dict, activity_at=None) -> str | None:
     """The Console's 5-minute re-check, sync (the recheck pool): the account and permission and module (account_refusal, with the last
     DATA time as activity), then the person's access to the session's site (scope_refusal, from the live record, 1.18.50), then that the
-    probe still has presence or a data socket. Returns the reason it fails, or None. Also run at once when the person's access marker moves."""
+    probe still has presence or a data socket. Returns the reason it fails, or None. Also run at once when the person's access marker moves.
+    Since 1.18.53 it first re-reads the Console certificate row (revoked or CA no longer active: certificate_revoked; past its end:
+    certificate_expired); a database fault there is check_failed, like the account check."""
+    serial = value.get("cert_serial")
+    if serial:
+        try:
+            reason = _certs().recheck(serial)
+        except Exception:
+            logger.warning("The Console certificate re-check failed; refusing.", exc_info=True)
+            return "check_failed"
+        if reason:
+            return reason
     reason = account_refusal(value, record["permission"], activity_at)
     if reason:
         return reason
@@ -696,6 +819,8 @@ def end_audit(session_id: str, marker: dict, counters: dict | None = None) -> bo
         extra["engineer"] = record["user_id"]
     if marker.get("detail"):
         extra["detail"] = marker["detail"]
+    if isinstance(console, dict) and console.get("cert_serial"):  # 1.18.53: the certificate the Console connected with
+        extra["cert_serial"] = console["cert_serial"]
     _audit("custom:probe-tunnel-end", record.get("probe_id"), reason=marker["reason"], extra=extra)
     return True
 
@@ -781,6 +906,98 @@ def end_for_probe(probe_id: str, reason: str, ended_by: str = "core", detail: st
         if result.get("outcome") == "ok" and not result.get("already_ended"):
             ended.append(session_id)
     return ended
+
+
+# ------------------------------------------------------------------------------------------------ the Console certificate (1.18.53)
+def cert_revoked_key(serial: str) -> str:
+    return CERT_REVOKED_PREFIX + serial
+
+
+def ca_replaced_key(server_id: str) -> str:
+    return CA_REPLACED_PREFIX + server_id
+
+
+def _console_serial(session_id: str):
+    marker = _cache().get(side_key(session_id, "console"))
+    return marker.get("cert_serial") if isinstance(marker, dict) else None
+
+
+def _end_sessions(match, detail: str) -> list[str]:
+    """End every live session (at most MAX_SESSIONS) for which ``match(session_id)`` is true, ended_by_core with ``detail``. Stops after
+    END_BUDGET_SECONDS: what is left ends through the marker, in its socket's next 5-second tick. Returns the ids this call ended."""
+    ended = []
+    started = time.time()
+    for session_id in list(read_index()):
+        if time.time() - started > END_BUDGET_SECONDS:
+            logger.warning("Ending tunnel sessions ran out of time; the rest end at the next tick of their socket.")
+            break
+        try:
+            if get_end(session_id) or not match(session_id):
+                continue
+            result = end_session(session_id, "ended_by_core", "core", detail)
+        except Exception:
+            logger.warning("A tunnel session could not be ended for a Console certificate change.", exc_info=True)
+            continue
+        if result.get("outcome") == "ok" and not result.get("already_ended"):
+            ended.append(session_id)
+    return ended
+
+
+def end_for_certificate(serial: str, detail: str = "certificate_revoked") -> list[str]:
+    """End every live session whose Console connected with this certificate (and only those). Returns the ids this call ended."""
+    return _end_sessions(lambda session_id: _console_serial(session_id) == serial, detail)
+
+
+def end_all_sessions(detail: str = "ca_replaced") -> list[str]:
+    """End every live session. Returns the ids this call ended."""
+    return _end_sessions(lambda session_id: True, detail)
+
+
+def certificate_revoked(serial: str) -> list[str]:
+    """After a certificate was revoked and the change committed: write the backstop marker, then end its sessions at once. A fault in either
+    part never stops the other and never reaches the revoke."""
+    try:
+        _cache().set(cert_revoked_key(serial), 1, _keep_seconds())
+    except Exception:
+        logger.warning("The certificate revoke marker could not be written; the 5-minute re-check is the backstop.", exc_info=True)
+    return end_for_certificate(serial, "certificate_revoked")
+
+
+def ca_replaced(server_id: str) -> list[str]:
+    """After the Console CA was replaced and the change committed: the same for every session."""
+    try:
+        _cache().set(ca_replaced_key(server_id), 1, _keep_seconds())
+    except Exception:
+        logger.warning("The CA replacement marker could not be written; the 5-minute re-check is the backstop.", exc_info=True)
+    return end_all_sessions("ca_replaced")
+
+
+def certificate_end_reason(serial: str, server_id) -> str | None:
+    """What a Console socket reads in its 5-second tick: ``ca_replaced`` or ``certificate_revoked`` when a marker exists, else None. One
+    get_many. A cache fault reads as None (the 5-minute re-check is the backstop)."""
+    keys = [cert_revoked_key(serial)]
+    if isinstance(server_id, str) and server_id:
+        keys.append(ca_replaced_key(server_id))
+    try:
+        found = _cache().get_many(keys) or {}
+    except Exception:
+        logger.debug("The certificate markers could not be read.", exc_info=True)
+        return None
+    if len(keys) > 1 and found.get(keys[1]):
+        return "ca_replaced"
+    return "certificate_revoked" if found.get(keys[0]) else None
+
+
+def record_certificate_refusal(reason: str, ip: str, session_id=None, engineer_id=None, serial=None) -> None:
+    """Sync (the audit pool). The one custom:console-cert-refused row of a refused Console connect, at most one per address per minute. Never
+    raises."""
+    pt._close_db(False)
+    try:
+        _certs().record_refusal(reason, ip, session_id=session_id, engineer_id=engineer_id, serial=serial)
+    except Exception:
+        logger.warning("The Console certificate refusal row could not be written.", exc_info=True)
+    finally:
+        pt._close_db(False)
 
 
 # ------------------------------------------------------------------------------------------------ status

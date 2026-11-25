@@ -1,6 +1,6 @@
 # Network Probe transport (Core 1.18.47)
 
-Core 1.18.46 added one websocket for the Network Probe and one contract for the module that owns it. Core 1.18.47 adds the tunnel to it. The capability is `core.probe_transport`: 1.0.0 is the control channel (framework 1.18.46 or later) and 1.1.0 adds the tunnel (framework 1.18.47 or later). 1.1.0 is additive: nothing in 1.0.0 changed.
+Core 1.18.46 added one websocket for the Network Probe and one contract for the module that owns it. Core 1.18.47 adds the tunnel to it. The capability is `core.probe_transport`: 1.0.0 is the control channel (framework 1.18.46 or later) and 1.1.0 adds the tunnel (framework 1.18.47 or later). 1.1.0 is additive: nothing in 1.0.0 changed. 1.2.0 (framework 1.18.50) adds the site scope and 1.3.0 (framework 1.18.53) adds the Engineer Console certificate (see "Console certificates (1.3.0)" below). Both are additive too.
 
 Core owns the connection and its security. The module `networkprobe` owns who a probe is, what the messages mean and the probe record. Core never reads `func`.
 
@@ -156,7 +156,7 @@ Five operations, for `networkprobe` only (Core verifies the caller; `module_id` 
 * `idle_s` is 60 to 900 (default 900). `cap_s` is 60 to 14400 (default 14400).
 * `site_id` (1.2.0, optional) is the probe's site, a positive integer (not a boolean). Send it: without it Core checks no scope.
 
-Core checks, in this order: a signed-in request with a live Knox digest, the spec, the permission, the engineer's access to `site_id` (when sent), the probe's presence (an offline probe is refused, so no slot is spent), the ticket rate, then the slots. The ticket is `secrets.token_urlsafe(32)`, 43 characters. Only its SHA-256 is stored, under its own cache prefix, for `TICKET_TTL_SECONDS` (60) and it works once. Every refusal writes one deny row (`custom:probe-tunnel-refused`) and never holds the ticket.
+Core checks, in this order: a signed-in request with a live Knox digest, the spec, the permission, the engineer's access to `site_id` (when sent), the engineer's Engineer Console certificate (1.3.0: `{outcome: denied, code: console_certificate_required}` when the person holds no active, unexpired certificate of the active CA; the message says to enrol from My Account; a fault while reading is `unavailable`), the probe's presence (an offline probe is refused, so no slot is spent), the ticket rate, then the slots. The ticket is `secrets.token_urlsafe(32)`, 43 characters. Only its SHA-256 is stored, under its own cache prefix, for `TICKET_TTL_SECONDS` (60) and it works once. Every refusal writes one deny row (`custom:probe-tunnel-refused`) and never holds the ticket.
 
 The launch link is `tectac-console://open?host=<server host>&ticket=<ticket>`. The host comes from the request, lower case, without port 443.
 
@@ -191,7 +191,7 @@ Both are binary only: a text frame is a protocol error (close 1002). No Origin r
 
 | Route | Headers |
 |---|---|
-| `wss://<host>/ws/tfd/probe-tunnel/` (Console) | `Authorization: Ticket <43 characters>` |
+| `wss://<host>/ws/tfd/probe-tunnel/` (Console) | `Authorization: Ticket <43 characters>`, and since 1.3.0 `X-Tectac-Console-Cert` and `X-Tectac-Console-Proof` (see "Console certificates (1.3.0)"). Core's accept carries `X-Tectac-Server-Proof`. |
 | `wss://<host>/ws/tfd/network-probe/tunnel/` (probe) | `Authorization: Probe <probe_id>.<key>` and `X-Tunnel-Session: <uuid>` |
 
 The Console side redeems its ticket once. Core re-checks the account at connect: the user is active and not blocked, the Knox token is live, the Tec-Tac session is not revoked, idle or past its lifetime (the engineer's idle and absolute sign-in limits apply to a live tunnel; the engineer's own DATA frames count as activity, output from the target does not, rule 1.8), the permission is held and the module is enabled. The probe side goes through the same identity check and failure counters as the control route, and its session must be a pending session of that probe. A `Ticket` or `Token` header on the probe route, and a `Probe` or `Token` header on the Console route, is refused 4401 (`wrong_scheme`) and never reaches an authenticator. One Console side and one probe side per session.
@@ -206,6 +206,29 @@ Core keeps the engineer's access to the probe's site true for as long as a sessi
 * When the owner moves a probe to another site it calls `set_tunnel_site(module_id, probe_id, site_id)`. Core writes the new site into every live session of that probe that the caller opened (session ids that ended are skipped) and has each opener's Console re-check within one 5 second tick. An engineer with no access to the new site is ended; one with access keeps the session.
 * The access marker: Core's own access-change hook (Core-internal, not a capability and not offered to modules; `docs/access-events.md`) stamps each affected person's id and a time in the shared cache when a role's permissions or client and site scope change, or a user's role or active state changes. Each Console socket reads its own person's marker every 5 seconds and, when it is newer than the last one it saw, runs the re-check in that tick. So a real loss ends the session within about 5 to 10 seconds, not instantly. A change that touches nothing the person holds ends nothing. Changes that fire no Django signal (`queryset.update`, raw SQL) and a deleted site wait for the 5-minute re-check.
 * Without `site_id` (an owner that predates 1.2.0) Core checks no scope; the account, permission and module checks still run. Core publishes no read of other people's access: it ends the sessions itself.
+
+### Console certificates (1.3.0)
+
+`core.probe_transport` 1.3.0 needs framework 1.18.53 or later. It is additive: no operation, argument or answer shape changed. From Core 1.18.53 an engineer's Console connects only with an Engineer Console certificate, and a Console without one cannot open a tunnel. `docs/console-certificates.md` ("The tunnel connect, exactly") holds the exact bytes for the Console developer. In short:
+
+* `issue_tunnel_ticket` refuses a person with no valid certificate: `{outcome: denied, code: console_certificate_required}`, one deny row, and no slot or rate budget spent. `networkprobe` maps every denied to one generic answer today, so nothing breaks; it may show a clearer message.
+* The Console connect carries two more headers, `X-Tectac-Console-Cert` (the certificate, base64url DER) and `X-Tectac-Console-Proof` (`v1.<time>.<nonce>.<sig>`, signed with the certificate's key over the host, the server id, the SHA-256 of the ticket, the serial, the time and the nonce).
+* Core's websocket accept carries `X-Tectac-Server-Proof: v1.<sig>`, signed by the CA key. The Console checks it before it opens its local port. On Tactical 1.6.1 (uvicorn) the accept headers reach the client; Tactical 1.5.2 (Daphne) is not verified.
+* A refusal closes 4401 with one of seven reasons as the close text:
+
+| Reason | Meaning |
+|---|---|
+| `certificate_required` | the certificate header or the proof header is missing (the ticket is not burnt) |
+| `certificate_invalid` | malformed, not from the active CA, not in Core's table, or not equal to it |
+| `certificate_expired` | past its end |
+| `certificate_revoked` | revoked |
+| `certificate_engineer_mismatch` | the certificate belongs to another engineer than the ticket |
+| `proof_invalid` | the proof signature, its host or its server id is wrong, or the `Host` header is not a plain host name |
+| `proof_stale` | the Console's time and Core's differ by more than 120 seconds |
+
+* Every refusal counts against the address and writes one `custom:console-cert-refused` row (at most one a minute per address). The seven reasons write no `custom:probe-tunnel-refused` row. A master key that cannot sign the server proof closes 1013 (`master_key_unavailable`) and burns the ticket.
+* While the session runs, the 5 second tick ends it at the certificate's end and when a revoke or CA-replacement marker exists; the 5-minute re-check re-reads the certificate row first. A revoke ends the live sessions of that certificate at once, and a CA replacement ends every live session. The end row's `detail` is `certificate_revoked`, `certificate_expired` or `ca_replaced`; the close reason stays `ended_by_core`. These details are in Core's own end row. They are not yet published to the owner's `tunnel_status` or `tunnel.closed` event.
+* `custom:probe-tunnel-connect` and `custom:probe-tunnel-end` carry `cert_serial`.
 
 ### Frames
 
@@ -236,7 +259,7 @@ Known residual: a frame sent to a peer that has already disconnected waits in Re
 
 | Code | Meaning on the tunnel routes |
 |---|---|
-| 4401 | Ticket unknown, used or expired; the account, permission, module or site-access check failed (`scope_lost`); the probe's identity was refused. |
+| 4401 | Ticket unknown, used or expired; the account, permission, module or site-access check failed (`scope_lost`); the probe's identity was refused; since 1.3.0 also the seven Console certificate reasons (`certificate_required`, `certificate_invalid`, `certificate_expired`, `certificate_revoked`, `certificate_engineer_mismatch`, `proof_invalid`, `proof_stale`). |
 | 4403 | Plain-text connection. |
 | 4404 | No pending session of that name (unknown, ended, or another probe's). |
 | 4409 | That side of the session is already attached. |
@@ -252,7 +275,7 @@ The close text and the `reason` of the end row and the `tunnel.closed` event com
 
 * Console drops: `console_disconnected` (no resume). The probe's data socket drops: `probe_offline`. No probe side within 15 seconds of the Console: `probe_offline`. No Console within the 60 second ticket window: `console_not_connected`.
 * A `send` that raises `ChannelFull`, takes over 5 seconds or fails, and a frame with the wrong sequence number, end the session `relay_overloaded`.
-* The watcher (5 second tick) ends the session `idle_timeout` or `hard_cap`, and every 5 minutes (with up to 30 seconds of jitter) re-checks the account, the permission, the module and the probe's presence or data socket. A lost right, a disabled account, a revoked session, a disabled module or a lost site (`scope_lost`) ends it `ended_by_core`.
+* The watcher (5 second tick) ends the session `idle_timeout` or `hard_cap`, and every 5 minutes (with up to 30 seconds of jitter) re-checks the account, the permission, the module and the probe's presence or data socket. A lost right, a disabled account, a revoked session, a disabled module or a lost site (`scope_lost`) ends it `ended_by_core`. Since 1.3.0 a revoked or expired Console certificate and a replaced CA end it the same way (detail `certificate_revoked`, `certificate_expired` or `ca_replaced`).
 * When Core refuses a probe at its own 5-minute re-check, it ends that probe's tunnels itself, `ended_by_core`.
 
 ### End, events and audit
@@ -266,6 +289,6 @@ payload: {session_id, reason, ended_by, bytes_up, bytes_down, source: "core"}
 
 The Console consumer sends it at its close with the final counters. When the Console never attached, whoever ended the session sends it with zero counters. When the probe socket's backstop ended the session, the probe socket sends it with the last flushed counters. The probe's own `tunnel.closed` event arrives through the normal event path; `source` tells them apart.
 
-Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket` (engineer, session id and permission; no target), `custom:probe-tunnel-connect` (with the side), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`) and `custom:probe-tunnel-refused` (reason code). Never a ticket, key, header, payload or target address.
+Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket` (engineer, session id and permission; no target), `custom:probe-tunnel-connect` (with the side, and `cert_serial` for the Console side since 1.3.0), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`, and `cert_serial` for an attached Console) and `custom:probe-tunnel-refused` (reason code). A refused Console certificate or proof writes one `custom:console-cert-refused` row instead (provenance `console-certificates`). Never a ticket, key, header, payload or target address, and never a certificate or a proof.
 
 The end row of a session with an attached Console is written by that Console's consumer at its close, with its final counters. A server process that dies without closing its sockets leaves no end row for that session; its slot heals at its expiry.

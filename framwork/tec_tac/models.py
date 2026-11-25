@@ -941,7 +941,7 @@ class TecTacConsoleCertificate(models.Model):
     revoked_at = models.DateTimeField(null=True, blank=True)
     revoked_by = models.IntegerField(null=True, blank=True)
     revoked_reason = models.CharField(max_length=16, blank=True, default="")
-    last_used_at = models.DateTimeField(null=True, blank=True)  # stays empty until Core 1.18.53 (C4) checks certificates on a tunnel
+    last_used_at = models.DateTimeField(null=True, blank=True)  # the last time a tunnel connect used this certificate (Core 1.18.53, written at most once an hour); empty until first used
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
