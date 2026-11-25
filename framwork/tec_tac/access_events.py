@@ -1,17 +1,30 @@
-"""Core's access-change hook (core.access_events 1.0.0, Core 1.18.50).
+"""Core's access-change hook (Core-internal since Core 1.18.51; it is not a capability and no module may use it).
 
-Core tells the rest of the system WHICH PEOPLE are affected when a role's permissions or its client and site scope change, or when a user's
-role, active flag, superuser flag or dashboard block changes or the user is deleted. It never says what the change was.
+Core marks WHICH PEOPLE are affected when a role's permissions or its client and site scope change, or when a user's role, active flag,
+superuser flag or dashboard block changes or the user is deleted. It never says what the change was. Core's own tunnel relay reads the marker
+to re-check a live Console session within one 5-second tick instead of waiting for the 5-minute re-check.
 
-Three public things:
+Core 1.18.50 offered this to every module as core.access_events. The 1.18.50 review found that this gave every module a cross-user read
+without a signed decision, so 1.18.51 registers no capability, publishes no contract row and exposes no Signal. Johan decided on 25 November 2026 that modules may listen only in a
+declared form, built the first time a module needs it; until then this stays Core-only (reviews/questions/core.md).
 
-* ``access_changed``: a Django Signal. It is sent with ``user_ids`` (a frozenset of ints) and ``reason`` (one of REASONS). It is sent with
-  ``send_robust``, so a faulty receiver never stops the others and never stops Tactical's own save. It fires in the process that saved the
-  change (a web worker or a Celery worker), not in the ASGI process that holds a tunnel socket.
-* ``changed_at(user_id)``: the time of the newest change for one person, or None. It is read from the shared Django cache, so any process
-  can ask. This is how Core's tunnel relay (another process) learns of a change within one 5-second tick.
-* ``notify_access_changed(user_ids, reason)``: Core's own call, used by the receivers below. It is not offered through the capability: a
-  module cannot make Core re-check people.
+What is here:
+
+* ``_access_changed``: a private Django Signal. Core has no consumer of it today. It is sent with ``send_robust``, so a faulty receiver never
+  stops the others and never stops Tactical's own save. It fires in the process that saved the change (a web worker or a Celery worker).
+* ``changed_at(user_id)``: the time of the newest change for one person, or None. It reads the shared Django cache, so Core's tunnel relay
+  (another process) learns of a change within one tick. It answers only when its first caller outside this file is Core's tunnel code
+  (``probe_tunnel.access_changed_at``); any other caller gets None.
+* ``notify_access_changed(user_ids, reason)``: used by the receivers below. It accepts only a call that comes from Django's own signal
+  dispatcher (Core's model receivers).
+* ``mark_changed(user_ids)``: used by ``probe_tunnel.update_site`` only, when an owner moves a probe to another site.
+
+What is enforced, in plain words. Each writer and the reader judge their caller from the call stack, by the real path of the first frame
+outside this file. A frame of an installed, enabled module is refused (the verified-identity helper of tec_tac.caller_identity), and so is
+every frame that is not on the short list above: a library frame such as threading or a functools.partial run by Core's Scheduler is refused
+too. A refusal changes nothing (a writer returns 0, the reader None) and logs one warning a minute. An unverifiable check refuses.
+What is not enforced: hostile code that reaches private underscore names, forges a file name, calls Django's own model signals itself or
+writes the shared cache key directly. That is a signed-module-review matter, the same limit as docs/caller-identity.md.
 
 Not covered, by design: changes that fire no Django signal (queryset.update, raw SQL) and a deleted site or client. Those wait for the
 5-minute re-check, which stays as the backstop.
@@ -21,15 +34,15 @@ Nothing here reads, stores or logs what a person may or may not do. A marker is 
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
-from typing import Any
 
 from django.dispatch import Signal
 
 logger = logging.getLogger("tec_tac.access_events")
 
-CAPABILITY_ID = "core.access_events"
-CAPABILITY_VERSION = "1.0.0"
+SCOPE = "core-internal"  # not a capability: nothing is registered, nothing is exported
 
 REASONS = ("role_permissions", "role_scope", "user_changed", "user_removed")
 MARKER_PREFIX = "tec-tac:access:chg:"
@@ -37,9 +50,94 @@ MARKER_SECONDS = 6 * 3600  # above the tunnel hard cap (4 hours): a session can 
 MAX_USER_IDS = 5000
 USER_FIELDS = frozenset({"role", "role_id", "is_active", "is_superuser", "block_dashboard_login"})
 ROLE_CACHE_PREFIX = "role_"  # Tactical's own prefix (tacticalrmm.constants.ROLE_CACHE_PREFIX); read from there when it imports
-OPERATIONS = ("access_changed", "changed_at")
+WARN_SECONDS = 60  # a refused caller is logged once a minute at most, so a loop cannot flood the log
 
-access_changed = Signal()
+_access_changed = Signal()  # private: no public Signal name; a future Core consumer connects here
+
+
+# ------------------------------------------------------------------------------------------------ the caller check
+_THIS_FILE = os.path.normcase(os.path.realpath(__file__))
+_TUNNEL_FILE = os.path.normcase(os.path.realpath(os.path.join(os.path.dirname(__file__), "probe_tunnel.py")))
+_LAST_WARN = [0.0]
+_TEST_ALLOWED: set[str] = set()  # test seam only (see _allow_caller_for_tests); empty in a running Core
+
+# the one first caller each function accepts: ("dispatcher" = Django's signal dispatcher, "tunnel" = probe_tunnel.py) and its function name
+_ALLOWED = {
+    "notify_access_changed": ("dispatcher", None),
+    "mark_changed": ("tunnel", "update_site"),
+    "changed_at": ("tunnel", "access_changed_at"),
+}
+
+
+def _real(path) -> str:
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
+def _dispatcher_file() -> str | None:
+    module = sys.modules.get("django.dispatch.dispatcher")
+    path = getattr(module, "__file__", None)
+    return _real(path) if path else None
+
+
+def _allow_caller_for_tests(path) -> None:
+    """Test seam: name a file whose frames count as an allowed Core caller. Nothing in Core calls this."""
+    _TEST_ALLOWED.add(_real(path))
+
+
+def clear_callers_for_tests() -> None:
+    _TEST_ALLOWED.clear()
+    _LAST_WARN[0] = 0.0
+
+
+def _refusal_reason() -> str:
+    """Whether a verified module made the call (the identity helper reads the module list from disk, so it runs only for a log line)."""
+    from .caller_identity import calling_module_for_core_provider
+
+    # frame 1 of the helper is this function, which sits in this file: every frame of this file is skipped, so the caller is judged
+    return "a module called it" if calling_module_for_core_provider(provider_file=__file__) is not None else "not a Core caller"
+
+
+def _refuse(name: str, why) -> None:
+    """One warning a minute at most (a reader is only logged at debug, it runs every tick). ``why`` is text or a function that gives it."""
+    if name == "changed_at":
+        logger.debug("access_events.%s refused a caller.", name)
+        return
+    now = time.time()
+    if now - _LAST_WARN[0] < WARN_SECONDS:
+        return
+    _LAST_WARN[0] = now
+    try:
+        why = why() if callable(why) else why
+    except Exception:
+        logger.debug("The refused caller could not be described.", exc_info=True)
+        why = "the caller could not be verified"
+    logger.warning("access_events.%s refused a caller (%s); nothing was changed.", name, why)
+
+
+def _caller_allowed(name: str) -> bool:
+    """True only when the first frame outside this file is on the short Core list for ``name`` and is not a module's code. Any fault refuses."""
+    try:
+        getter = getattr(sys, "_getframe", None)
+        if getter is None:
+            _refuse(name, "the call stack cannot be read")
+            return False
+        frame = getter(1)
+        while frame is not None and _real(frame.f_code.co_filename) == _THIS_FILE:
+            frame = frame.f_back
+        if frame is None:
+            _refuse(name, "no caller frame")
+            return False
+        path, function = _real(frame.f_code.co_filename), frame.f_code.co_name
+        kind, wanted = _ALLOWED[name]
+        known = _dispatcher_file() if kind == "dispatcher" else _TUNNEL_FILE
+        if path in _TEST_ALLOWED or (known is not None and path == known and (wanted is None or function == wanted)):
+            return True  # a Core file: never a module's code, so the module lookup (a disk scan) is not needed on the hot path
+        _refuse(name, _refusal_reason)  # refused; the reason (a module lookup) is worked out only when a log line is due
+        return False
+    except Exception:
+        logger.debug("The caller check could not be completed; refusing.", exc_info=True)
+        _refuse(name, "the check could not be completed")
+        return False
 
 
 # ------------------------------------------------------------------------------------------------ the marker
@@ -70,7 +168,10 @@ def _clean_ids(user_ids) -> list[int]:
 
 
 def changed_at(user_id) -> float | None:
-    """The time (seconds since the epoch) of the newest access change for one person, or None. Cache only; a cache fault answers None."""
+    """The time (seconds since the epoch) of the newest access change for one person, or None. Cache only; a cache fault answers None.
+    Core-internal: answers only when the first caller outside this file is Core's tunnel code; any other caller gets None."""
+    if not _caller_allowed("changed_at"):
+        return None
     if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0:
         return None
     try:
@@ -102,19 +203,22 @@ def _deliver(ids: list[int], reason: str) -> None:
             logger.warning("An access marker could not be written; the 5-minute re-check is the backstop.", exc_info=True)
             break
     try:
-        responses = access_changed.send_robust(sender="core", user_ids=frozenset(ids), reason=reason)
+        responses = _access_changed.send_robust(sender="core", user_ids=frozenset(ids), reason=reason)
     except Exception:
-        logger.warning("The access_changed signal could not be sent.", exc_info=True)
+        logger.warning("The access change signal could not be sent.", exc_info=True)
         return
     for receiver, outcome in responses or ():
         if isinstance(outcome, Exception):
-            logger.warning("A receiver of access_changed failed (%s); the others were still told.", getattr(receiver, "__name__", "receiver"))
+            logger.warning("A receiver of the access change signal failed (%s); the others were still told.", getattr(receiver, "__name__", "receiver"))
 
 
 def notify_access_changed(user_ids, reason: str) -> int:
     """Mark and announce the people whose access changed. Returns how many ids were taken (0 when none, or the reason is not listed).
-    Inside a transaction the work runs when it commits, so a re-check never reads state that is not yet saved. Never raises."""
+    Inside a transaction the work runs when it commits, so a re-check never reads state that is not yet saved. Never raises.
+    Core-internal: a call from anywhere but Django's own signal dispatcher (Core's model receivers) is refused and returns 0."""
     try:
+        if not _caller_allowed("notify_access_changed"):
+            return 0
         if reason not in REASONS:
             return 0
         ids = _clean_ids(user_ids)
@@ -134,7 +238,10 @@ def notify_access_changed(user_ids, reason: str) -> int:
 
 def mark_changed(user_ids) -> int:
     """Core's own use only (the tunnel relay, when an owner moves a probe to another site): write the markers, send no signal. A site move is
-    not a change of a person's access, so no module is told. Returns how many markers were written; never raises."""
+    not a change of a person's access, so no module is told. Returns how many markers were written; never raises. Core-internal: a call
+    from anywhere but probe_tunnel.update_site is refused and returns 0."""
+    if not _caller_allowed("mark_changed"):
+        return 0
     ids = _clean_ids(user_ids)
     written, now = 0, time.time()
     for user_id in ids:
@@ -269,44 +376,3 @@ def connect_receivers() -> bool:
     post_save.connect(_on_user_saved, sender=User, weak=False, dispatch_uid=f"{uid}-user-save")
     post_delete.connect(_on_user_deleted, sender=User, weak=False, dispatch_uid=f"{uid}-user-delete")
     return True
-
-
-# ------------------------------------------------------------------------------------------------ the capability
-class AccessEventsProvider:
-    """The provider of core.access_events. ``access_changed`` is the Signal; ``changed_at`` reads one marker."""
-
-    access_changed = access_changed
-
-    def changed_at(self, *, user_id):
-        return changed_at(user_id)
-
-
-_PROVIDER = AccessEventsProvider()
-
-
-def access_events_contract_metadata() -> dict[str, Any]:
-    return {
-        "id": CAPABILITY_ID,
-        "version": CAPABILITY_VERSION,
-        "operations": list(OPERATIONS),
-        "signal": "tec_tac.access_events.access_changed: a Django Signal. Receivers get user_ids (a frozenset of ints) and reason (one of " + ", ".join(REASONS) + "). It says who, never what. Sent with send_robust, after the transaction commits, in the process that saved the change (a web or Celery worker).",
-        "changed_at": "changed_at(user_id) -> float | None. The time of the newest change for that person, from the shared Django cache, readable from any process. None when there is none, or the cache cannot be read.",
-        "fires_on": "A role's permissions saved or deleted; a role's client or site list changed (either side of the many-to-many); a Tec-Tac extension permission of a role saved or deleted; a user's role, active flag, superuser flag or dashboard block changed (a save that names other fields only does not fire); a user deleted.",
-        "does_not_fire_on": "Changes that fire no Django signal (queryset.update, raw SQL) and a deleted site or client. The 5-minute re-check of a live tunnel session stays as the backstop for those.",
-        "core_does_not": "Core does not say what changed, keep a history, or offer a way for a module to raise the signal. Core's tunnel relay uses it only to run its own re-check early.",
-        "added_in": "1.0.0 (Core 1.18.50, framework >=1.18.50).",
-    }
-
-
-def register_core_access_events_capability():
-    from .capabilities import register_capability
-
-    return register_capability(
-        id=CAPABILITY_ID,
-        module_id="core",
-        version=CAPABILITY_VERSION,
-        provider=_PROVIDER,
-        description="Which people are affected when a role's permissions or client and site scope, or a user's role or active state, change: a signal and a read of the newest change time.",
-        operations=OPERATIONS,
-        metadata=access_events_contract_metadata(),
-    )

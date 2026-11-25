@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""1.18.50 regression: core.access_events 1.0.0, the hook that says which people are affected when a role, its client and site scope or a user
+"""1.18.50 regression (updated in 1.18.51: the hook is Core-internal, tests/access-events-1.18.51.py covers the caller rules): the hook that says which people are affected when a role, its client and site scope or a user
 changes. The real framwork/tec_tac/access_events.py under the stubs of tests/probe_transport_harness.py (the cache, django.dispatch, the
 transaction) and a small stand-in for Tactical's Role, User and the m2m through classes. Django is not installed on this PC.
 
@@ -8,15 +8,13 @@ receiver never stops the others, after-commit delivery inside a transaction, nev
 delete, m2m forward add/remove/clear and reverse add/remove/pre_clear for clients and sites, extension permission save and delete, user save with
 and without update_fields, user delete) marks exactly the affected people and sends the signal once with the right reason; created rows fire
 nothing; Tactical's role cache key is deleted; a receiver that raises does not reach Tactical's save; connect_receivers is idempotent; apps.ready
-holds its own guarded blocks and keeps CRLF; the capability registers with its two operations.
+holds its own guarded block and keeps CRLF. Since 1.18.51 the capability is gone: this file runs its calls as an allowed Core caller (the test seam).
 """
 from __future__ import annotations
 
 import ast
 import importlib.util
 import logging
-import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +26,7 @@ must, reset, CACHE, WALL, TXN, ae = H.must, H.reset, H.CACHE, H.WALL, H.TXN, H.a
 logging.getLogger("tec_tac.access_events").addHandler(logging.NullHandler())
 logging.getLogger("tec_tac.access_events").propagate = False  # several cases log a warning on purpose
 APP = H.APP
+ae._allow_caller_for_tests(__file__)  # 1.18.51: the calls below stand in for Core (the dispatcher and the tunnel code)
 
 
 # ------------------------------------------------------------------------------------------------ Tactical's models, reduced
@@ -110,7 +109,7 @@ def role(pk, name=None):
 
 
 def seen():
-    return list(ae.access_changed.sent)
+    return list(ae._access_changed.sent)
 
 
 def marked(user_id):
@@ -158,8 +157,8 @@ TXN.in_atomic_block = False
 # a receiver that raises does not stop the others, and notify never raises
 fresh()
 got = []
-ae.access_changed.connect(lambda **kw: (_ for _ in ()).throw(RuntimeError("receiver bug")))
-ae.access_changed.connect(lambda **kw: got.append(kw["user_ids"]))
+ae._access_changed.connect(lambda **kw: (_ for _ in ()).throw(RuntimeError("receiver bug")))
+ae._access_changed.connect(lambda **kw: got.append(kw["user_ids"]))
 must(ae.notify_access_changed([10], "role_scope") == 1 and got == [frozenset({10})], "the next receiver still ran")
 # a cache fault: nothing raises
 fresh()
@@ -199,7 +198,7 @@ def nothing(label):
 
 def clear():
     CACHE.data.clear()
-    ae.access_changed.sent.clear()
+    ae._access_changed.sent.clear()
 
 
 # role save and delete
@@ -296,34 +295,17 @@ nothing("a database fault marks nobody")
 FAULT["users"] = False
 
 # ---------------------------------------------------------------- the capability and apps.py
-registered: list = []
-stub_caps = types.ModuleType("tec_tac.capabilities")
-stub_caps.register_capability = lambda **kw: registered.append(kw) or kw
-sys.modules["tec_tac.capabilities"] = stub_caps
-ae.register_core_access_events_capability()
-must(len(registered) == 1, registered)
-cap = registered[0]
-must(cap["id"] == "core.access_events" and cap["module_id"] == "core" and cap["version"] == "1.0.0" and list(cap["operations"]) == ["access_changed", "changed_at"], cap["id"])
-must(cap["provider"].access_changed is ae.access_changed, "the provider hands out the signal")
-fresh()
-ae.notify_access_changed([10], "role_scope")
-must(cap["provider"].changed_at(user_id=10) == WALL[0], "the provider reads a marker")
-meta = ae.access_events_contract_metadata()
-must(cap["metadata"] == meta and meta["version"] == "1.0.0" and "framework >=1.18.50" in meta["added_in"], meta)
-for reason in ae.REASONS:
-    must(reason in meta["signal"], reason)
-must(not hasattr(cap["provider"], "notify_access_changed") and not hasattr(cap["provider"], "mark_changed"), "a module cannot raise the signal")
-
+# no capability since 1.18.51; the apps.py block is checked below
 apps = (APP / "apps.py").read_bytes().decode("utf-8")
 tree = ast.parse(apps)
 guarded = {}
 for node in ast.walk(tree):
     if isinstance(node, ast.Try):
         body = ast.dump(ast.Module(body=node.body, type_ignores=[]))
-        for name in ("register_core_access_events_capability", "connect_receivers"):
-            if f"id='{name}'" in body:
-                guarded[name] = (bool(node.handlers), sum(1 for n in ("register_core_access_events_capability", "connect_receivers", "register_core_probe_transport_capability") if f"id='{n}'" in body))
-must(guarded == {"register_core_access_events_capability": (True, 1), "connect_receivers": (True, 1)}, ("each in its own guarded block", guarded))
+        if "id='connect_receivers'" in body:
+            guarded["connect_receivers"] = (bool(node.handlers), body.count("id='connect_receivers'"))
+must(guarded == {"connect_receivers": (True, 1)}, ("the receivers connect in their own guarded block", guarded))
+must("register_core_access_events_capability" not in apps, "apps.py registers no access-events capability")
 must("\r\n" in apps and apps.count("\n") == apps.count("\r\n"), "apps.py keeps CRLF")
 
 # ---------------------------------------------------------------- the file itself
@@ -335,7 +317,7 @@ must(not any("accounts" in (getattr(n, "module", "") or "") or "tec_tac" in (get
 for forbidden in ("kindly", "don't hesitate", "ethnocentric"):
     must(forbidden not in text.lower(), forbidden)
 doc = (H.ROOT / "docs" / "access-events.md").read_text(encoding="utf-8")
-for needle in ("core.access_events", "access_changed", "changed_at", "role_permissions", "role_scope", "user_changed", "user_removed", "queryset.update", "5000", "send_robust",
-               "has_capability", "1.18.50", "backstop"):
+for needle in ("Core-internal", "_access_changed", "changed_at", "role_permissions", "role_scope", "user_changed", "user_removed", "queryset.update", "5000", "send_robust",
+               "1.18.51", "backstop"):
     must(needle in doc, "the docs name " + needle)
 print("PASS access events 1.18.50")

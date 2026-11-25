@@ -53,14 +53,8 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_probe_transport_capability()
         except Exception:
             logger.exception("Tec-Tac core.probe_transport capability registration failed")
-        # 1.18.50: core.access_events (which people are affected when a role, its scope or a user changes). Two guarded blocks: the capability
-        # and the receivers on Tactical's models. A fault in either never aborts start-up; the 5-minute tunnel re-check stays as the backstop.
-        try:
-            from .access_events import register_core_access_events_capability
-
-            register_core_access_events_capability()
-        except Exception:
-            logger.exception("Tec-Tac core.access_events capability registration failed")
+        # 1.18.51: access events are Core-internal (no capability is registered). One guarded block connects the receivers on Tactical's
+        # models. A fault never aborts start-up; the 5-minute tunnel re-check stays as the backstop.
         try:
             from .access_events import connect_receivers
 

@@ -90,6 +90,7 @@ RECHECK_GRACE_SECONDS = 300
 SEND_TIMEOUT_SECONDS = 5.0
 FRAMES_PER_SECOND_MAX = 2000  # 1.18.49: control frames (OPEN, ACK, CLOSE) one tunnel socket may send in a one-second window; the next ends the session protocol_error
 DATA_FRAMES_PER_SECOND_MAX = 10000  # 1.18.50: DATA frames in the same window, counted apart so a fast copy is not ended by its own ACKs (100 Mbit/s of 1.5 KB frames)
+DATA_SMALL_PAYLOAD_BYTES = 512  # 1.18.51: only a DATA frame with at least this much payload counts against the DATA bound; a smaller one counts against the control bound (FRAMES_PER_SECOND_MAX), so a flood of 1-byte frames cannot hide in the 10000
 RATE_CONTROL, RATE_DATA = "rate_control", "rate_data"  # the end row's detail says which bound a protocol_error was
 BACKSTOP_IDLE_GRACE_SECONDS = 30  # 1.18.49: the probe socket's own idle timer is the Console's idle limit plus this
 
@@ -374,7 +375,7 @@ def scope_refusal(user_id, site_id) -> str | None:
 
 
 def access_changed_at(user_id):
-    """The time of the newest access change for one person (core.access_events), or None. Cache only; any fault is None."""
+    """The time of the newest access change for one person (Core's own marker, not a capability), or None. Cache only; any fault is None. access_events.changed_at answers only this function."""
     try:
         from . import access_events
 
@@ -387,7 +388,7 @@ def access_changed_at(user_id):
 def update_site(module_id: str, probe_id: str, site_id: int) -> list[str]:
     """The owner moved a probe to another site (set_tunnel_site): for every live session of that probe that the module opened, write the new
     site into the session record and mark the opener's access marker, so each Console re-checks within one 5-second tick. Returns the ids
-    changed. An ended session is skipped."""
+    changed. An ended session is skipped. access_events.mark_changed accepts only this function as its caller."""
     from . import access_events
 
     updated = []

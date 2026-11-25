@@ -1070,7 +1070,7 @@ def tunnel_contract_metadata() -> dict[str, Any]:
 
     return {
         "since": "1.1.0",
-        "scope": "1.2.0 (Core 1.18.50): the ticket spec may carry site_id (the probe's site). Core then refuses a person who cannot see that site (denied, code out_of_scope), refuses their Console connect (4401 scope_lost) and ends their session (ended_by_core, detail scope_lost) at the next re-check after they lose it: at once (within about 10 seconds) when a role's permissions or client and site scope, or the person's role or account, change (core.access_events), and at the latest at the 5-minute re-check. set_tunnel_site tells Core the owner moved the probe. Without site_id Core checks no scope.",
+        "scope": "1.2.0 (Core 1.18.50): the ticket spec may carry site_id (the probe's site). Core then refuses a person who cannot see that site (denied, code out_of_scope), refuses their Console connect (4401 scope_lost) and ends their session (ended_by_core, detail scope_lost) at the next re-check after they lose it: at once (within about 10 seconds) when a role's permissions or client and site scope, or the person's role or account, change (Core's own marker, not a capability and not offered to modules), and at the latest at the 5-minute re-check. set_tunnel_site tells Core the owner moved the probe. Without site_id Core checks no scope.",
         "routes": {
             "console": "wss://<host>/ws/tfd/probe-tunnel/ (the engineer's Console). Header: Authorization: Ticket <43 characters>. Binary frames only.",
             "probe": "wss://<host>/ws/tfd/network-probe/tunnel/ (the probe). Headers: Authorization: Probe <probe_id>.<key> and X-Tunnel-Session: <uuid>. Binary frames only.",
@@ -1082,13 +1082,13 @@ def tunnel_contract_metadata() -> dict[str, Any]:
             "tickets_per_engineer_per_minute": tun.TICKETS_PER_MINUTE, "ticket_seconds": tun.TICKET_TTL_SECONDS, "idle_seconds": tun.IDLE_SECONDS_MAX,
             "hard_cap_seconds": tun.CAP_SECONDS_MAX, "buffer_bytes": tun.BUFFER_CAP_BYTES, "pair_wait_seconds": tun.PAIR_WAIT_SECONDS,
             "recheck_seconds": tun.RECHECK_SECONDS, "control_frames_per_second": tun.FRAMES_PER_SECOND_MAX,
-            "data_frames_per_second": tun.DATA_FRAMES_PER_SECOND_MAX,
+            "data_frames_per_second": tun.DATA_FRAMES_PER_SECOND_MAX, "small_data_payload_bytes": tun.DATA_SMALL_PAYLOAD_BYTES,
         },
         "close_reasons": list(tun.ALL_REASONS),
         "close_codes": {
             "4401": "ticket unknown, used or expired, or the account, permission or module check failed; the probe side's identity was refused",
             "4403": "plain-text connection", "4404": "no pending session of that name for this ticket or probe",
-            "4409": "that side of the session is already attached", "1002": "protocol error: a text frame, an unknown type byte, a bad length, or too many frames in a second (detail rate_control or rate_data)",
+            "4409": "that side of the session is already attached", "1002": "protocol error: a text frame, an unknown type byte, a bad length, or too many frames in a second (detail rate_control or rate_data; a DATA frame with under 512 bytes of payload counts as a control frame, 1.18.51)",
             "1013": "retry later: a busy or faulty server, or a relay that cannot keep up (relay_overloaded)", "1001": "the server is going away (server_restart)",
             "4503": "no owner registered, or the tunnel consumer could not be loaded",
         },

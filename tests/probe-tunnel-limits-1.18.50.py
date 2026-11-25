@@ -160,7 +160,7 @@ async def case_rates():
     control, data_limit = tun.FRAMES_PER_SECOND_MAX, tun.DATA_FRAMES_PER_SECOND_MAX
     must(control == 2000 and data_limit == 10000 and (tun.RATE_CONTROL, tun.RATE_DATA) == ("rate_control", "rate_data"), "the figures")
     ack = frame(ACK, 1, b"\x00\x00\x00\x01")
-    dat = frame(DATA, 1, b"x")
+    dat = frame(DATA, 1, b"x" * 512)  # 1.18.51: only a payload of 512 bytes or more counts against the DATA bound
     for sender in ("console", "probe"):
         # 2000 ACKs pass, the 2001st ends protocol_error with detail rate_control
         console, probe, sid, clock = await pair_ready()

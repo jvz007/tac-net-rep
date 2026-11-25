@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
+import os
 import sys
 import tempfile
 import types
@@ -142,6 +143,16 @@ CALLER = {"module_id": "networkprobe"}  # None means unverifiable
 
 
 def _caller(*, provider_file):
+    if str(provider_file).endswith("access_events.py"):
+        # 1.18.51: the real helper's walk for access_events: skip that file's frames, the next frame is the caller. A frame whose file name
+        # starts with <stub-module:ID> is the code of installed module ID; anything else is not a module.
+        frame = sys._getframe(1)
+        while frame is not None and os.path.realpath(frame.f_code.co_filename) == os.path.realpath(str(provider_file)):
+            frame = frame.f_back
+        name = frame.f_code.co_filename if frame is not None else ""
+        if name.startswith("<stub-module:"):
+            return SimpleNamespace(module_id=name[len("<stub-module:"):].split(">")[0], kind="module", module_version="1")
+        return None
     return None if CALLER["module_id"] is None else SimpleNamespace(module_id=CALLER["module_id"], kind="module", module_version="1")
 
 
@@ -415,8 +426,9 @@ def reset():
     SITES.update(visible={ENGINEER: {7}}, mode="normal", calls=[])  # the engineer sees site 7, the site add_probe gives the probe
     TXN.in_atomic_block = False
     TXN.pending.clear()
-    ae.access_changed.receivers.clear()
-    ae.access_changed.sent.clear()
+    ae._access_changed.receivers.clear()
+    ae._access_changed.sent.clear()
+    ae._LAST_WARN[0] = 0.0
 
 
 def set_owner():

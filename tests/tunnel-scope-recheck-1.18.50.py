@@ -29,6 +29,7 @@ for name in ("tec_tac.probe_transport", "tec_tac.access_events"):
     logging.getLogger(name).addHandler(logging.NullHandler())
     logging.getLogger(name).propagate = False  # the fault cases log a warning on purpose
 DATA = 2
+ae._allow_caller_for_tests(__file__)  # 1.18.51: the notify calls below stand in for Core's own signal receivers
 
 
 def fresh():
@@ -424,6 +425,6 @@ must(b"\r" not in source, "probe_tunnel.py is LF")
 consumer = (H.APP / "probe_tunnel_consumer.py").read_text(encoding="utf-8")
 must("tun.access_changed_at" in consumer and "_access_seen" in consumer and consumer.count("_access_seen") >= 4, "the Console reads the marker once a tick")
 doc = (H.ROOT / "docs" / "probe-transport.md").read_text(encoding="utf-8")
-for needle in ("Scope and access (1.2.0)", "set_tunnel_site", "site_id", "out_of_scope", "scope_lost", "core.access_events", "5 to 10 seconds", "queryset.update"):
+for needle in ("Scope and access (1.2.0)", "set_tunnel_site", "site_id", "out_of_scope", "scope_lost", "Core-internal", "5 to 10 seconds", "queryset.update"):
     must(needle in doc, "the docs name " + needle)
 print("PASS tunnel scope recheck 1.18.50")

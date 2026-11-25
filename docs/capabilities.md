@@ -312,7 +312,7 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ## Core access events
 
-`core.access_events` 1.0.0 (framework >=1.18.50) tells modules which people are affected when a role's permissions or client and site scope change, or a user's role or active state changes, or a user is deleted: the Django signal `tec_tac.access_events.access_changed` (`user_ids`, `reason`) and `changed_at(user_id)`. It says who, never what changed, fires after commit in the saving process, and misses changes that fire no Django signal (keep a periodic re-check). A module cannot raise it. See `docs/access-events.md`.
+Access events are Core-internal and not registered as a capability (Core 1.18.51). Core 1.18.50 offered them as `core.access_events` 1.0.0; 1.18.51 withdraws that capability, its two contract rows and the public Signal, and the capability check for it answers no. No module may connect to, read or raise them: Core checks each caller, and a call from module code is refused. Core's tunnel relay reads its own marker. The checks stop ordinary module calls; hostile code that forges file names or writes the shared cache directly is a signed-module-review matter. Johan decided on 25 November 2026 that modules may listen only in a declared form (the manifest names it, the review checks the reason, the admin sees it at install). That form is built the first time a module needs it; until then there is none. See `docs/access-events.md`.
 
 ## Core agent downloads
 

@@ -26,11 +26,13 @@ or a reorder (a message the layer expired after 60 seconds, a Redis flush) ends 
 
 Limits on each socket: more than FRAMES_PER_SECOND_MAX control frames (OPEN, ACK, CLOSE) or DATA_FRAMES_PER_SECOND_MAX DATA frames in a one-second
 window (counted apart, in memory, checked first) end the session protocol_error; the end row's detail says rate_control or rate_data (1.18.50).
+Since 1.18.51 only a DATA frame with at least DATA_SMALL_PAYLOAD_BYTES (512) of payload counts against the DATA bound; a smaller one counts
+against the control bound, so a flood of tiny frames ends the session at 2000 a second and a bulk copy is not slowed.
 The probe socket also keeps backstop timers (idle limit plus a grace, the Console's attach time plus the hard cap plus the slot grace) so a
 Console worker that died cannot leave a session running; a session ended by them is written and delivered by the probe consumer.
 
 Access (1.18.50): the Console's 5-minute re-check also asks whether the person may still see the session's site (probe_tunnel.scope_refusal), and
-it runs at once, in the next 5-second tick, when the person's access marker (core.access_events) is newer than the last one this socket saw.
+it runs at once, in the next 5-second tick, when the person's access marker (Core's own, not a capability) is newer than the last one this socket saw.
 
 The receive loop never touches the database, the cache or the broker: every blocking call runs on one of the probe route's own pools, never
 on the event loop's default executor and never on a pool of the agent route. Core logs no frame, no byte and no ticket.
@@ -289,12 +291,14 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
     # -------------------------------------------------------------------------------------------- limits and pairing (shared)
     def _rate_exceeded(self, bytes_data=None):
         """In memory only (no cache, no database). DATA frames and control frames are counted apart in the same one-second window: more than
-        DATA_FRAMES_PER_SECOND_MAX DATA frames, or more than FRAMES_PER_SECOND_MAX of anything else (OPEN, ACK, CLOSE, a text frame, an empty or
-        unknown message), is over. Returns the bound that was passed (RATE_DATA or RATE_CONTROL), or None."""
+        DATA_FRAMES_PER_SECOND_MAX DATA frames of DATA_SMALL_PAYLOAD_BYTES or more of payload, or more than FRAMES_PER_SECOND_MAX of anything
+        else (OPEN, ACK, CLOSE, a DATA frame with a smaller payload (1.18.51), a text frame, an empty or unknown message), is over. Returns the
+        bound that was passed (RATE_DATA or RATE_CONTROL), or None."""
         now = self._clock()
         if self._rate_start is None or now - self._rate_start >= 1.0:
             self._rate_start, self._rate_count, self._rate_data = now, 0, 0
-        if isinstance(bytes_data, (bytes, bytearray)) and len(bytes_data) > 0 and bytes_data[0] == tun.TYPE_DATA:
+        if (isinstance(bytes_data, (bytes, bytearray)) and len(bytes_data) > 0 and bytes_data[0] == tun.TYPE_DATA
+                and len(bytes_data) - tun.HEADER_LEN >= tun.DATA_SMALL_PAYLOAD_BYTES):
             self._rate_data += 1
             return tun.RATE_DATA if self._rate_data > tun.DATA_FRAMES_PER_SECOND_MAX else None
         self._rate_count += 1
