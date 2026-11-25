@@ -69,6 +69,7 @@ python3 "${ROOT}/tests/probe-tunnel-relay-1.18.47.py"
 python3 "${ROOT}/tests/probe-tunnel-end-1.18.47.py"
 python3 "${ROOT}/tests/probe-tunnel-isolation-1.18.47.py"
 python3 "${ROOT}/tests/probe-transport-hardening-1.18.47.py"
-python3 "${ROOT}/tests/version-1.18.47.py"
+python3 "${ROOT}/tests/probe-tunnel-pairing-1.18.48.py"
+python3 "${ROOT}/tests/version-1.18.48.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

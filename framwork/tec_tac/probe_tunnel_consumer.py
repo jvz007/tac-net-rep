@@ -1,4 +1,4 @@
-"""The two Network Probe tunnel sockets (Core 1.18.47). Loaded lazily by probe_tunnel._TunnelRoute.
+"""The two Network Probe tunnel sockets (Core 1.18.47, pairing and activity rules 1.18.48). Loaded lazily by probe_tunnel._TunnelRoute.
 
 ws/tfd/network-probe/tunnel/ is the probe's side and ws/tfd/probe-tunnel/ the Console's side. Both are binary only. Each joins the group
 tectac-pnt-<session_id> and forwards what it receives with a group_send tagged with its side; a peer ignores its own. Core reads byte 0 (the
@@ -9,9 +9,15 @@ probe route's own pools. The Console side redeems its one-time ticket and re-che
 authenticator exactly like the control route and names its session in X-Tunnel-Session (4404 unknown, 4409 already attached). The socket is
 accepted before a refusal is closed, with the close code and the reason name as the close text.
 
-The Console consumer is the session's clock: only DATA frames reset the idle timer and add payload bytes to bytes_up (Console to probe) or
-bytes_down (probe to Console); a watcher ends the session at the idle limit and the hard cap and re-checks the account every 5 minutes.
-Frames from the Console that arrive before the probe side attaches wait in a buffer of at most 1 MiB. A relay that cannot keep up
+The Console consumer is the session's clock: only DATA frames reset the tunnel's idle timer and add payload bytes to bytes_up (Console to
+probe) or bytes_down (probe to Console); a watcher ends the session at the idle limit and the hard cap and re-checks the account every 5
+minutes. Only the engineer's own DATA frames (Console to probe) are passed to the sign-in as activity (rule 1.8, AD-35); output from the target
+never refreshes the sign-in idle timer.
+Pairing: the Console counts itself paired only when the probe's socket is in the group. The probe consumer writes the "probe_ready" marker
+after accept and group_add and before it sends tunnel.paired; the Console joins the group first and then looks at the marker, so either it
+sees the marker or the probe's tunnel.paired reaches it. Its watcher also polls the marker while unpaired, so a lost tunnel.paired cannot
+leave it waiting. Frames from the Console that arrive before then wait in a buffer of at most 1 MiB, sent in order when pairing completes
+(a frame that arrives during the drain is queued behind the earlier ones). A relay that cannot keep up
 (ChannelFull, or a send that takes over 5 seconds) ends the session relay_overloaded.
 
 The receive loop never touches the database, the cache or the broker: every blocking call runs on one of the probe route's own pools, never
@@ -329,6 +335,7 @@ class ProbeTunnelProbeConsumer(_TunnelConsumer):
         await self.accept()
         self._attached = True
         await self.channel_layer.group_add(self._group, self.channel_name)
+        await self._cache_call(tun.mark_probe_ready, session_id)  # in the group: from here the Console may pair (a fault leaves the Console's 15 s wait)
         try:
             await asyncio.wait_for(self.channel_layer.group_send(self._group, {"type": "tunnel.paired"}), timeout=tun.SEND_TIMEOUT_SECONDS)
         except Exception:
@@ -408,6 +415,7 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         super().__init__(*args, **kwargs)
         self._value = None
         self._paired = False
+        self._pairing = False
         self._buffer: list = []
         self._buffered = 0
         self._wall = lambda: tun.time.time()
@@ -416,7 +424,8 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         self._connected_at = 0.0
         self._last_data = 0.0
         self._last_data_wall = None
-        self._data_since_check = False
+        self._last_up_wall = None  # the engineer's own DATA (Console to probe): the only activity the sign-in sees
+        self._up_since_check = False
         self.bytes_up = 0
         self.bytes_down = 0
         self._next_flush = 0.0
@@ -462,8 +471,9 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         self._identity_ok_at = now
         self._next_flush = now + tun.FLUSH_SECONDS
         self._next_recheck = now + tun.RECHECK_SECONDS + self._random() * tun.RECHECK_JITTER_SECONDS
-        # The probe may have attached first: join the group first, then look, so a probe that attaches in between still sends tunnel.paired.
-        self._paired = bool(await self._cache_call(tun.side_attached, self.session_id, "probe", default=False))
+        # Join the group first, then look at the ready marker: a probe that joins in between still sends tunnel.paired to this socket.
+        if await self._cache_call(tun.side_attached, self.session_id, tun.SIDE_PROBE_READY, default=False):
+            await self._complete_pairing()
         self._spawn(self._audit("custom:probe-tunnel-connect", probe_id=self.probe_id, ip=self._ip,
                                 extra={"session_id": self.session_id, "side": "console", "engineer": self._value["user_id"]}))
         self._watch = asyncio.ensure_future(self._watch_loop())
@@ -491,8 +501,9 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
     def _note_data(self, payload_bytes, up):
         self._last_data = self._clock()
         self._last_data_wall = self._wall()
-        self._data_since_check = True
         if up:
+            self._last_up_wall = self._last_data_wall
+            self._up_since_check = True
             self.bytes_up += payload_bytes
         else:
             self.bytes_down += payload_bytes
@@ -514,14 +525,24 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
             return
         await self._forward(bytes_data)
 
-    async def tunnel_paired(self, event):
-        if self._paired or self._ended_local:
+    async def _complete_pairing(self):
+        """Send what was held, in order, then switch to direct forwarding. A frame that arrives during the drain is appended and sent after
+        the earlier ones; paired is set only when the buffer is empty, with no await between the check and the set."""
+        if self._paired or self._ended_local or self._pairing:
             return
-        self._paired = True
-        pending, self._buffer, self._buffered = self._buffer, [], 0
-        for data in pending:
-            if not await self._forward(data):
-                return
+        self._pairing = True
+        try:
+            while self._buffer:
+                held = self._buffer.pop(0)
+                self._buffered -= len(held)
+                if not await self._forward(held):
+                    return
+            self._paired = True
+        finally:
+            self._pairing = False
+
+    async def tunnel_paired(self, event):
+        await self._complete_pairing()
 
     async def tunnel_frame(self, event):
         if event.get("side") == self.side or self._ended_local:
@@ -545,6 +566,8 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         if now - self._connected_at >= self._cap_s:
             await self._end("hard_cap")
             return False
+        if not self._paired and not self._pairing and await self._cache_call(tun.side_attached, self.session_id, tun.SIDE_PROBE_READY, default=False):
+            await self._complete_pairing()  # a lost tunnel.paired or a failed look at connect
         if not self._paired and now - self._connected_at >= tun.PAIR_WAIT_SECONDS:
             await self._end("probe_offline")
             return False
@@ -556,7 +579,7 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
                 await self._close_with(marker.get("reason") or "ended_by_core")
                 return False
         if now >= self._next_recheck:
-            activity = datetime.fromtimestamp(self._last_data_wall, timezone.utc) if self._data_since_check and self._last_data_wall else None
+            activity = datetime.fromtimestamp(self._last_up_wall, timezone.utc) if self._up_since_check and self._last_up_wall else None
             try:
                 reason = await asyncio.wait_for(pt.run_in_pool("recheck", _console_recheck_job, self._value, self._record, activity), timeout=pt.AUTH_TIMEOUT_SECONDS)
                 transient = False
@@ -577,6 +600,6 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
                 return False
             else:
                 self._identity_ok_at = now
-                self._data_since_check = False
+                self._up_since_check = False
                 self._next_recheck = now + tun.RECHECK_SECONDS + self._random() * tun.RECHECK_JITTER_SECONDS
         return True

@@ -188,7 +188,7 @@ Both are binary only: a text frame is a protocol error (close 1002). No Origin r
 | `wss://<host>/ws/tfd/probe-tunnel/` (Console) | `Authorization: Ticket <43 characters>` |
 | `wss://<host>/ws/tfd/network-probe/tunnel/` (probe) | `Authorization: Probe <probe_id>.<key>` and `X-Tunnel-Session: <uuid>` |
 
-The Console side redeems its ticket once. Core re-checks the account at connect: the user is active and not blocked, the Knox token is live, the Tec-Tac session is not revoked, idle or past its lifetime (the engineer's idle and absolute sign-in limits apply to a live tunnel, and DATA frames count as activity), the permission is held and the module is enabled. The probe side goes through the same identity check and failure counters as the control route, and its session must be a pending session of that probe. A `Ticket` or `Token` header on the probe route, and a `Probe` or `Token` header on the Console route, is refused 4401 (`wrong_scheme`) and never reaches an authenticator. One Console side and one probe side per session.
+The Console side redeems its ticket once. Core re-checks the account at connect: the user is active and not blocked, the Knox token is live, the Tec-Tac session is not revoked, idle or past its lifetime (the engineer's idle and absolute sign-in limits apply to a live tunnel; the engineer's own DATA frames count as activity, output from the target does not, rule 1.8), the permission is held and the module is enabled. The probe side goes through the same identity check and failure counters as the control route, and its session must be a pending session of that probe. A `Ticket` or `Token` header on the probe route, and a `Probe` or `Token` header on the Console route, is refused 4401 (`wrong_scheme`) and never reaches an authenticator. One Console side and one probe side per session.
 
 ### Frames
 
@@ -196,7 +196,9 @@ One binary websocket message is one frame: `[type u8][stream u32 BE][payload]`. 
 
 Core reads byte 0 and the length only. The type must be 1 to 4 and the length 5 up to 5 + 32768. Anything else, and any text frame, ends the session with close 1002. Core never parses stream ids, windows or payloads and never logs them.
 
-Only DATA frames reset the idle timer. The Console's consumer counts DATA payload bytes (the frame length minus 5): `bytes_up` is Console to probe and `bytes_down` is probe to Console.
+Only DATA frames reset the tunnel's idle timer. The Console's consumer counts DATA payload bytes (the frame length minus 5): `bytes_up` is Console to probe and `bytes_down` is probe to Console. For the engineer's sign-in, only the engineer's own DATA frames (Console to probe) count as activity; output from the target does not refresh the sign-in idle timer (rule 1.8, AD-35). A session that only streams output therefore ends at the sign-in idle limit.
+
+Pairing (1.18.48): the Console is paired only once the probe's socket is in the session's group. The probe side records that moment (after it has accepted and joined the group) and then sends `tunnel.paired`. Frames the Console sends before then wait in Core's buffer (at most 1 MiB, then `probe_offline`; 15 seconds, then `probe_offline`) and go out in order the moment the probe is in the group, so the first frames after `OPEN` are never lost. The Console may wait a few milliseconds for the probe to join. No wire change: Core still reads only the type byte and the length.
 
 ### Close codes
 

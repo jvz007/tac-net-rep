@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.47",
+  "version": "1.18.48",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.47.md",
-      "size": 15043,
-      "sha256": "ccc4a66da9feb6a5a3f4ecaa1f34bc0149e1769c0cb27fdc1d3ffb1067fcdb1e"
+      "path": "RELEASE_NOTES_1.18.48.md",
+      "size": 7637,
+      "sha256": "4e6cca0cab8730d4655f1cd4af7447e08dcf652f37b92ccb9f7e3cc4580c22aa"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "1367f676c44a88049a05662d09821ed26bd5c3c1e074894b1daf17412fd4b880"
+      "sha256": "b1985518edeefaa205899b542cf9f5d2a00e8bb9418d5d4850a86c44100d7106"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -238,8 +238,8 @@
     },
     {
       "path": "docs/probe-transport.md",
-      "size": 18961,
-      "sha256": "15dff2b5575d4bac84b2747b263a76dfa3365f59f421e56441a36c450ee917f4"
+      "size": 19868,
+      "sha256": "05d784a7c4869f539a190974d1e7b4945b6f2bffd10fda28f7ef04dab516137f"
     },
     {
       "path": "docs/releases/README.md",
@@ -1942,6 +1942,11 @@
       "sha256": "d3eab15715cb7f803b705d9b58f73cabb85bf9b9e4c41bbb56ce4506d054fe47"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.47.md",
+      "size": 15043,
+      "sha256": "ccc4a66da9feb6a5a3f4ecaa1f34bc0149e1769c0cb27fdc1d3ffb1067fcdb1e"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.5.md",
       "size": 7115,
       "sha256": "e3a83c453ee86652118e88bd703f1f737c544e01fbd59d49da188cac94c29e98"
@@ -2983,13 +2988,13 @@
     },
     {
       "path": "framwork/tec_tac/probe_tunnel.py",
-      "size": 35267,
-      "sha256": "a7e62854bf0cd9e540acf42e97d5a5b67dc6f771bfc9e9177858ccc615f69664"
+      "size": 36010,
+      "sha256": "b16ad0bda0c16640d1d00c737dcf586c3ca5fa20c35767bef369ff7fc474be22"
     },
     {
       "path": "framwork/tec_tac/probe_tunnel_consumer.py",
-      "size": 28073,
-      "sha256": "4b1da570ec5c5c1b6a881023be3757454f209cf6d1a808ea3a66a557973d1297"
+      "size": 29927,
+      "sha256": "1b4d628bb01e8d448ce7b1678d727e49ee2db782b9dfbbf1ad52ce06486d2b5c"
     },
     {
       "path": "framwork/tec_tac/rbac.py",
@@ -3459,7 +3464,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "729b54801123caabe5bfe8212f2dda1d5dd523b5367d1ed113f52d73fb5cf1bb"
+      "sha256": "4c60f9d8831873ffc82b7433acdc7fd09d4a6687691096418bd7a3a6effbcc38"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4967,6 +4972,11 @@
       "sha256": "36dcf8d9e636aaf422ecf1c2048c8d05e0b9713642a24841b44d35013f26f8b0"
     },
     {
+      "path": "tests/legacy/version-1.18.47.py",
+      "size": 5250,
+      "sha256": "0fd8167295989566aaac15bd0929b58213e85b4de890138b2922e3195a269a0d"
+    },
+    {
       "path": "tests/legacy/version-1.18.5.py",
       "size": 2220,
       "sha256": "e51eff2844559a107e19d8aba39181aa9104312ceb406b75c3b09c433075dd02"
@@ -5712,6 +5722,11 @@
       "sha256": "2b902576c966679681215c329a9084f59ea56a37505df2118e39e448239e42ba"
     },
     {
+      "path": "tests/probe-tunnel-pairing-1.18.48.py",
+      "size": 17091,
+      "sha256": "cbe3990b047bcc41ff367acdf64506c59bc0a055c2859e39839704f0a61c6098"
+    },
+    {
       "path": "tests/probe-tunnel-relay-1.18.47.py",
       "size": 28451,
       "sha256": "89864cf3044909da594a5ad5e44321b4508248d2cb95f0b26270e2acf1f10bd0"
@@ -5763,8 +5778,8 @@
     },
     {
       "path": "tests/release-integrity.sh",
-      "size": 3367,
-      "sha256": "a7d9a6d9997b1ae174763897e91b67b24f9d1ac00ff331dc5d0fd127fce30460"
+      "size": 3423,
+      "sha256": "dc4a53148728789ea0d38d13771e13c665ea695608d68ce72bea3e6c2e199e6a"
     },
     {
       "path": "tests/replacement-registration-statement-1.17.68.py",
@@ -8157,9 +8172,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.47.py",
-      "size": 5250,
-      "sha256": "0fd8167295989566aaac15bd0929b58213e85b4de890138b2922e3195a269a0d"
+      "path": "tests/version-1.18.48.py",
+      "size": 5021,
+      "sha256": "62f34475003a6c041a5f61e3533fbfd6c367061d50384ccf35cc8f81468a40c4"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

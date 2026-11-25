@@ -42,6 +42,7 @@ INDEX_KEY = "tec-tac:pt:tun-index"
 LOCK_KEY = "tec-tac:pt:tun-lock"
 SESSION_PREFIX = "tec-tac:pt:tun:"
 SIDE_PREFIX = "tec-tac:pt:tunside:"
+SIDE_PROBE_READY = "probe_ready"  # 1.18.48: written once the probe socket is in the group; the Console pairs on this, not on the attach marker
 END_PREFIX = "tec-tac:pt:tunend:"
 STATS_PREFIX = "tec-tac:pt:tunstat:"
 CLOSED_PREFIX = "tec-tac:pt:tunclosed:"
@@ -519,6 +520,12 @@ def console_recheck(value: dict, record: dict, activity_at=None) -> str | None:
     return None
 
 
+def mark_probe_ready(session_id: str) -> None:
+    """Sync (the cache pool). The probe's socket calls this after it has joined the session's group, before it sends tunnel.paired. The
+    Console pairs only once this marker exists, so the first frames it sends always have a probe in the group to reach (1.18.48)."""
+    _cache().set(side_key(session_id, SIDE_PROBE_READY), {"at": time.time()}, _keep_seconds())
+
+
 def probe_open(probe_id: str, session_id: str):
     """The probe data side's session decision, sync (the cache pool). Returns (status, record): ok, not_pending (4404) or attached (4409)."""
     record = get_record(session_id)
@@ -530,8 +537,10 @@ def probe_open(probe_id: str, session_id: str):
 
 
 def poll_session(session_id: str) -> dict:
-    """What a watcher asks every few seconds: {ended: marker or None, console: bool, probe: bool}. Cache only."""
-    return {"ended": get_end(session_id), "console": side_attached(session_id, "console"), "probe": side_attached(session_id, "probe")}
+    """What a watcher asks every few seconds: {ended: marker or None, console: bool, probe: bool, ready: bool}. Cache only. probe is the
+    attach marker (the 4409 guard); ready means the probe's socket is in the group (1.18.48)."""
+    return {"ended": get_end(session_id), "console": side_attached(session_id, "console"), "probe": side_attached(session_id, "probe"),
+            "ready": side_attached(session_id, SIDE_PROBE_READY)}
 
 
 def flush_stats(session_id: str, last_data: float, bytes_up: int, bytes_down: int) -> dict | None:
