@@ -78,7 +78,7 @@ must(stored["idle_s"] == 900 and stored["cap_s"] == 14400 and stored["module_id"
 must(not tun.TICKET_PREFIX.startswith(pt.GROUP_PREFIX) and tun.GROUP_PREFIX != pt.GROUP_PREFIX and not tun.GROUP_PREFIX.startswith("tectac-pn-"), "own group prefix")
 ok_rows = [a for a in AUDITS if a["action"] == "custom:probe-tunnel-ticket"]
 must(len(ok_rows) == 1 and ok_rows[0]["probe_id"] == H.PROBE and ok_rows[0]["metadata"]["engineer"] == H.ENGINEER
-     and ok_rows[0]["metadata"]["session_id"] == sid and ok_rows[0]["metadata"]["target"] == "srv-9" and ok_rows[0]["refusal"] is False, ok_rows)
+     and ok_rows[0]["metadata"]["session_id"] == sid and "target" not in ok_rows[0]["metadata"] and ok_rows[0]["refusal"] is False, ok_rows)
 # the slot is held from issue
 must(sid in tun.read_index(), "slot held from ticket issue")
 must(pt.tunnel_status("networkprobe", [sid])["sessions"][sid]["state"] == "pending", "pending until the Console connects")

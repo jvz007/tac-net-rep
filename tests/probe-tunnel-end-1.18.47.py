@@ -325,7 +325,7 @@ pt.record_probe_event("custom:probe-tunnel-end", H.PROBE, reason="idle_timeout",
                       extra={"engineer": 5, "session_id": "s", "bytes_up": 10, "bytes_down": 0, "duration": 3, "ended_by": "core", "side": "console", "ticket": "SECRET", "key": "SECRET",
                              "payload": b"SECRET", "flag": True, "none": None, "target": "x" * 300})
 meta = captured[-1]["metadata"]
-must(set(meta) == {"reason", "engineer", "session_id", "bytes_up", "bytes_down", "duration", "ended_by", "side", "target"} and len(meta["target"]) == 128, meta)
+must(set(meta) == {"reason", "engineer", "session_id", "bytes_up", "bytes_down", "duration", "ended_by", "side"}, meta)  # 1.18.49: no target key can reach a tunnel row
 must("SECRET" not in repr(captured), "only the named fields reach a row")
 pt.record_probe_event("custom:probe-connect", H.PROBE, ip="203.0.113.9")
 must(captured[-1]["metadata"] == {"ip": "203.0.113.9"}, "no extra, no change")

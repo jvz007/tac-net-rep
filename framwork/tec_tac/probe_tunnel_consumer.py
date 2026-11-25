@@ -1,8 +1,10 @@
-"""The two Network Probe tunnel sockets (Core 1.18.47, pairing and activity rules 1.18.48). Loaded lazily by probe_tunnel._TunnelRoute.
+"""The two Network Probe tunnel sockets (Core 1.18.47, pairing and activity rules 1.18.48, relay hardening 1.18.49). Loaded lazily by
+probe_tunnel._TunnelRoute.
 
 ws/tfd/network-probe/tunnel/ is the probe's side and ws/tfd/probe-tunnel/ the Console's side. Both are binary only. Each joins the group
-tectac-pnt-<session_id> and forwards what it receives with a group_send tagged with its side; a peer ignores its own. Core reads byte 0 (the
-type, 1 to 4) and the length (5 up to 5 + 32 KiB) and nothing else: stream ids, windows and payloads are never parsed, logged, audited or stored.
+tectac-pnt-<session_id>, which carries only tunnel.paired and tunnel.end. Frames go to the peer's own channel name with channel_layer.send:
+a group_send drops a message without a word when a member's channel is full (channels_redis 4.3.0), send raises ChannelFull. Core reads byte 0
+(the type, 1 to 4) and the length (5 up to 5 + 32 KiB) and nothing else: stream ids, windows and payloads are never parsed, logged, audited or stored.
 
 Connect (both): the address ceiling, a registered owner (none: 4503), plaintext (4403), the credential header, then the decision on the
 probe route's own pools. The Console side redeems its one-time ticket and re-checks the account (4401); the probe side runs the owner's
@@ -13,12 +15,18 @@ The Console consumer is the session's clock: only DATA frames reset the tunnel's
 probe) or bytes_down (probe to Console); a watcher ends the session at the idle limit and the hard cap and re-checks the account every 5
 minutes. Only the engineer's own DATA frames (Console to probe) are passed to the sign-in as activity (rule 1.8, AD-35); output from the target
 never refreshes the sign-in idle timer.
-Pairing: the Console counts itself paired only when the probe's socket is in the group. The probe consumer writes the "probe_ready" marker
-after accept and group_add and before it sends tunnel.paired; the Console joins the group first and then looks at the marker, so either it
-sees the marker or the probe's tunnel.paired reaches it. Its watcher also polls the marker while unpaired, so a lost tunnel.paired cannot
-leave it waiting. Frames from the Console that arrive before then wait in a buffer of at most 1 MiB, sent in order when pairing completes
-(a frame that arrives during the drain is queued behind the earlier ones). A relay that cannot keep up
-(ChannelFull, or a send that takes over 5 seconds) ends the session relay_overloaded.
+Pairing is symmetric (1.18.49): a side is paired when it knows its peer's channel name. After accept and group_add each side writes its ready
+marker (probe_ready, console_ready) carrying its own channel name, sends tunnel.paired {side, channel} to the group and then looks at the other
+side's marker, so either it sees the marker or the peer's tunnel.paired reaches it. The watcher also polls the peer's marker while unpaired, so a
+lost tunnel.paired cannot leave a side waiting. Frames that arrive before then wait in a buffer of at most 1 MiB, sent in order when pairing
+completes (a frame that arrives during the drain is queued behind the earlier ones). Over the cap the Console side ends probe_offline and the probe
+side console_not_connected. A relay that cannot keep up (ChannelFull, a send that takes over 5 seconds or any layer error) ends the session
+relay_overloaded and never drops a frame. Each direction numbers its frames inside the channel-layer message (seq, not on the wire): a gap, a repeat
+or a reorder (a message the layer expired after 60 seconds, a Redis flush) ends the session relay_overloaded.
+
+Limits on each socket: FRAMES_PER_SECOND_MAX messages in a one-second window (counted in memory, checked first) end the session protocol_error.
+The probe socket also keeps backstop timers (idle limit plus a grace, hard cap plus the slot grace) so a Console worker that died cannot leave a
+session running; a session ended by them is written and delivered by the probe consumer.
 
 The receive loop never touches the database, the cache or the broker: every blocking call runs on one of the probe route's own pools, never
 on the event loop's default executor and never on a pool of the agent route. Core logs no frame, no byte and no ticket.
@@ -79,6 +87,15 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
         self._closing = False
         self._watch = None
         self._last_log = {}
+        self._peer = None  # the peer's channel name, once known: paired means this is set and the buffer is empty
+        self._paired = False
+        self._pairing = False
+        self._buffer: list = []
+        self._buffered = 0
+        self._send_seq = 0
+        self._recv_seq = 0
+        self._rate_start = None
+        self._rate_count = 0
 
     # -------------------------------------------------------------------------------------------- helpers
     async def _cache_call(self, func, *args, default=None, busy_raises=False):
@@ -180,7 +197,7 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
         raise NotImplementedError
 
     # -------------------------------------------------------------------------------------------- end of a session
-    async def _end(self, reason, ended_by="core", detail="", *, close=True, code=None):
+    async def _end(self, reason, ended_by="core", detail="", *, close=True, code=None, backstop=False):
         """End the session from this socket: the first end wins in the cache, the peer is told through the group, this socket closes with the
         reason as its close text, and the audit row, the probe's tunnel.close and (when the Console never attached) tunnel.closed follow."""
         if self._ended_local or self.session_id is None:
@@ -202,17 +219,25 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
             logger.debug("A call failed and was handled (see the caller).", exc_info=True)
             self._throttled_log("announce", "A tunnel end message could not be sent to the group.")
         if status == "won":
-            self._spawn(self._finish(marker))
+            self._spawn(self._finish(marker, backstop))
 
-    async def _finish(self, marker):
+    async def _finish(self, marker, backstop=False):
         """After this socket won the end: tell the probe on the control channel and, when the Console side never attached, write the end row
-        and deliver tunnel.closed with zero counters. An attached Console consumer does both at its close, with its final counters."""
+        and deliver tunnel.closed with zero counters. An attached Console consumer does both at its close, with its final counters. A backstop
+        end (the probe socket's own timers: the Console's worker is gone) writes both itself with the last flushed counters; the Console's own
+        final row, if it ever comes, is a cache.add duplicate and is dropped."""
         try:
             await pt.run_in_pool("cache", tun.send_probe_close, self.probe_id, self.session_id, marker)
         except Exception:
             logger.debug("A call failed and was handled (see the caller).", exc_info=True)
             self._throttled_log("finish", "A step of ending a tunnel session failed.")
-        if self.side == "probe" and not await self._cache_call(tun.side_attached, self.session_id, "console", default=True):
+        if self.side != "probe":
+            return
+        if backstop:
+            stats = await self._cache_call(tun.read_stats, self.session_id, default=None) or {"bytes_up": 0, "bytes_down": 0}
+            await self._write_end_row(marker, None)
+            await self._deliver_closed(marker, stats["bytes_up"], stats["bytes_down"])
+        elif not await self._cache_call(tun.side_attached, self.session_id, "console", default=True):
             await self._write_end_row(marker, {"bytes_up": 0, "bytes_down": 0})
             await self._deliver_closed(marker, 0, 0)
 
@@ -239,10 +264,12 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
             self._throttled_log("owner", "A tunnel.closed event was not handed to its owner (%s).", outcome)
 
     async def _forward(self, data):
-        """Send one frame to the peer through the group. A relay that cannot keep up ends the session relay_overloaded."""
+        """Send one frame to the peer's own channel. send() raises ChannelFull where group_send would drop the frame without a word. A relay
+        that cannot keep up (ChannelFull, a send over 5 seconds, any layer error) ends the session relay_overloaded: a frame is never dropped."""
+        seq, self._send_seq = self._send_seq, self._send_seq + 1
         try:
             await asyncio.wait_for(
-                self.channel_layer.group_send(self._group, {"type": "tunnel.frame", "side": self.side, "data": bytes(data)}),
+                self.channel_layer.send(self._peer, {"type": "tunnel.frame", "side": self.side, "seq": seq, "data": bytes(data)}),
                 timeout=tun.SEND_TIMEOUT_SECONDS,
             )
             return True
@@ -254,7 +281,76 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
         await self._end("relay_overloaded")
         return False
 
-    # -------------------------------------------------------------------------------------------- group messages
+    # -------------------------------------------------------------------------------------------- limits and pairing (shared)
+    def _rate_exceeded(self):
+        """In memory only (no cache, no database): more than FRAMES_PER_SECOND_MAX messages in one second."""
+        now = self._clock()
+        if self._rate_start is None or now - self._rate_start >= 1.0:
+            self._rate_start, self._rate_count = now, 0
+        self._rate_count += 1
+        return self._rate_count > tun.FRAMES_PER_SECOND_MAX
+
+    async def _accept_frame(self, bytes_data):
+        """The first thing receive() does: the rate, then the frame check. False (and the session ended protocol_error) when it fails."""
+        if self._rate_exceeded() or bytes_data is None or not tun.check_frame(bytes_data):
+            await self._end("protocol_error")
+            return False
+        return True
+
+    unpaired_reason = "probe_offline"  # what a full buffer ends the session as
+
+    async def _hold_or_forward(self, bytes_data):
+        if not self._paired:
+            if self._buffered + len(bytes_data) > tun.BUFFER_CAP_BYTES:
+                await self._end(self.unpaired_reason)
+                return
+            self._buffer.append(bytes(bytes_data))
+            self._buffered += len(bytes_data)
+            return
+        await self._forward(bytes_data)
+
+    def _on_paired(self):
+        return None
+
+    async def _complete_pairing(self, channel=None):
+        """Remember the peer's channel, send what was held, in order, then switch to direct forwarding. A frame that arrives during the drain is
+        appended and sent after the earlier ones; paired is set only when the buffer is empty, with no await between the check and the set."""
+        channel = tun.clean_channel(channel)
+        if channel is not None and self._peer is None:
+            self._peer = channel
+        if self._peer is None or self._paired or self._ended_local or self._pairing:
+            return
+        self._pairing = True
+        try:
+            while self._buffer:
+                held = self._buffer.pop(0)
+                self._buffered -= len(held)
+                if not await self._forward(held):
+                    return
+            self._paired = True
+            self._on_paired()
+        finally:
+            self._pairing = False
+
+    async def _announce_ready(self, mark, peer_side):
+        """After accept and group_add: write this side's ready marker with its channel name, tell the group, then look at the peer's marker
+        (join, mark, tell, look: either the marker or the message is seen). False when the session ended here."""
+        await self._cache_call(mark, self.session_id, self.channel_name)
+        try:
+            await asyncio.wait_for(
+                self.channel_layer.group_send(self._group, {"type": "tunnel.paired", "side": self.side, "channel": self.channel_name}),
+                timeout=tun.SEND_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            logger.debug("A call failed and was handled (see the caller).", exc_info=True)
+            await self._end("relay_overloaded")
+            return False
+        found = await self._cache_call(tun.ready_channel, self.session_id, peer_side, default=None)
+        if found:
+            await self._complete_pairing(found)
+        return True
+
+    # -------------------------------------------------------------------------------------------- group and channel messages
     async def tunnel_end(self, event):
         """The session ended elsewhere (the other socket, an ender or Core): close with the reason as the close text."""
         reason = event.get("reason") if event.get("reason") in tun.ALL_REASONS else "ended_by_core"
@@ -262,7 +358,23 @@ class _TunnelConsumer(AsyncWebsocketConsumer):
         await self._close_with(reason)
 
     async def tunnel_paired(self, event):
-        return None
+        """The peer is in the group and names its channel. Our own message comes back to us and is ignored."""
+        if event.get("side") == self.side or self._ended_local:
+            return
+        await self._complete_pairing(event.get("channel"))
+
+    async def _take_frame(self, event):
+        """The peer's frame: its sequence number must be the next one, else a message was lost, repeated or reordered (the layer expired it, a
+        Redis flush) and the session ends relay_overloaded. Returns the bytes, or None."""
+        if event.get("side") == self.side or self._ended_local:
+            return None
+        seq = event.get("seq")
+        if isinstance(seq, bool) or seq != self._recv_seq:
+            await self._end("relay_overloaded")
+            return None
+        self._recv_seq += 1
+        data = event.get("data")
+        return bytes(data) if isinstance(data, (bytes, bytearray)) else None
 
     async def tunnel_frame(self, event):
         return None
@@ -288,6 +400,13 @@ class ProbeTunnelProbeConsumer(_TunnelConsumer):
         self._next_recheck = 0.0
         self._identity_ok_at = 0.0
         self._wall = lambda: tun.time.time()
+        self._last_data = 0.0  # DATA of either direction, once paired: the backstop's idle clock
+        self._console_seen_at = None
+
+    unpaired_reason = "console_not_connected"
+
+    def _on_paired(self):
+        self._last_data = self._clock()
 
     async def _connect_inner(self):
         if not await self._gate():
@@ -335,12 +454,10 @@ class ProbeTunnelProbeConsumer(_TunnelConsumer):
         await self.accept()
         self._attached = True
         await self.channel_layer.group_add(self._group, self.channel_name)
-        await self._cache_call(tun.mark_probe_ready, session_id)  # in the group: from here the Console may pair (a fault leaves the Console's 15 s wait)
-        try:
-            await asyncio.wait_for(self.channel_layer.group_send(self._group, {"type": "tunnel.paired"}), timeout=tun.SEND_TIMEOUT_SECONDS)
-        except Exception:
-            logger.debug("A call failed and was handled (see the caller).", exc_info=True)
-            await self._end("relay_overloaded")
+        now = self._clock()
+        self._last_data = now
+        # in the group: write the ready marker with our channel, tell the group, look for the Console's (a fault leaves the Console's 15 s wait)
+        if not await self._announce_ready(tun.mark_probe_ready, tun.SIDE_CONSOLE_READY):
             return
         now = self._clock()
         self._identity_ok_at = now
@@ -365,17 +482,19 @@ class ProbeTunnelProbeConsumer(_TunnelConsumer):
     async def receive(self, text_data=None, bytes_data=None):
         if self._ended_local:
             return
-        if bytes_data is None or not tun.check_frame(bytes_data):
-            await self._end("protocol_error")
+        if not await self._accept_frame(bytes_data):
             return
-        await self._forward(bytes_data)
+        if bytes_data[0] == tun.TYPE_DATA:
+            self._last_data = self._clock()
+        await self._hold_or_forward(bytes_data)
 
     async def tunnel_frame(self, event):
-        if event.get("side") == self.side or self._ended_local:
+        data = await self._take_frame(event)
+        if data is None:
             return
-        data = event.get("data")
-        if isinstance(data, (bytes, bytearray)):
-            await self.send(bytes_data=bytes(data))
+        if len(data) > tun.HEADER_LEN and data[0] == tun.TYPE_DATA:
+            self._last_data = self._clock()
+        await self.send(bytes_data=data)
 
     async def _tick(self) -> bool:
         if self._ended_local:
@@ -390,6 +509,22 @@ class ProbeTunnelProbeConsumer(_TunnelConsumer):
             if not state["console"] and self._wall() >= float(self._record.get("created", 0)) + tun.TICKET_TTL_SECONDS:
                 await self._end("console_not_connected")
                 return False
+            if not self._paired and not self._pairing and state.get("console_channel"):
+                await self._complete_pairing(state["console_channel"])  # a lost tunnel.paired or a failed look at connect
+            if not self._paired and not self._pairing and state["console"]:
+                # the Console is attached but its channel is still unknown: it has PAIR_WAIT_SECONDS from the first tick that saw it
+                if self._console_seen_at is None:
+                    self._console_seen_at = now
+                elif now - self._console_seen_at >= tun.PAIR_WAIT_SECONDS:
+                    await self._end("console_not_connected")
+                    return False
+        # the backstops of a dead Console worker (marker present, no end written): both later than the Console's own timers
+        if self._paired and now - self._last_data >= int(self._record["idle_s"]) + tun.BACKSTOP_IDLE_GRACE_SECONDS:
+            await self._end("idle_timeout", backstop=True)
+            return False
+        if self._wall() >= float(self._record.get("created", 0)) + int(self._record["cap_s"]) + tun.SLOT_GRACE_SECONDS:
+            await self._end("hard_cap", backstop=True)
+            return False
         if now >= self._next_recheck:
             result = await pt.authenticate_async(self.probe_id, self._key, pool="recheck")
             if result.transient:
@@ -414,10 +549,6 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._value = None
-        self._paired = False
-        self._pairing = False
-        self._buffer: list = []
-        self._buffered = 0
         self._wall = lambda: tun.time.time()
         self._idle_s = tun.IDLE_SECONDS_DEFAULT
         self._cap_s = tun.CAP_SECONDS_DEFAULT
@@ -471,9 +602,9 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         self._identity_ok_at = now
         self._next_flush = now + tun.FLUSH_SECONDS
         self._next_recheck = now + tun.RECHECK_SECONDS + self._random() * tun.RECHECK_JITTER_SECONDS
-        # Join the group first, then look at the ready marker: a probe that joins in between still sends tunnel.paired to this socket.
-        if await self._cache_call(tun.side_attached, self.session_id, tun.SIDE_PROBE_READY, default=False):
-            await self._complete_pairing()
+        # Join the group first, then mark, tell and look at the probe's marker: a probe that joins in between still sends tunnel.paired here.
+        if not await self._announce_ready(tun.mark_console_ready, tun.SIDE_PROBE_READY):
+            return
         self._spawn(self._audit("custom:probe-tunnel-connect", probe_id=self.probe_id, ip=self._ip,
                                 extra={"session_id": self.session_id, "side": "console", "engineer": self._value["user_id"]}))
         self._watch = asyncio.ensure_future(self._watch_loop())
@@ -511,48 +642,19 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
     async def receive(self, text_data=None, bytes_data=None):
         if self._ended_local:
             return
-        if bytes_data is None or not tun.check_frame(bytes_data):
-            await self._end("protocol_error")
+        if not await self._accept_frame(bytes_data):
             return
         if bytes_data[0] == tun.TYPE_DATA:
             self._note_data(len(bytes_data) - tun.HEADER_LEN, True)
-        if not self._paired:
-            if self._buffered + len(bytes_data) > tun.BUFFER_CAP_BYTES:
-                await self._end("probe_offline")
-                return
-            self._buffer.append(bytes(bytes_data))
-            self._buffered += len(bytes_data)
-            return
-        await self._forward(bytes_data)
-
-    async def _complete_pairing(self):
-        """Send what was held, in order, then switch to direct forwarding. A frame that arrives during the drain is appended and sent after
-        the earlier ones; paired is set only when the buffer is empty, with no await between the check and the set."""
-        if self._paired or self._ended_local or self._pairing:
-            return
-        self._pairing = True
-        try:
-            while self._buffer:
-                held = self._buffer.pop(0)
-                self._buffered -= len(held)
-                if not await self._forward(held):
-                    return
-            self._paired = True
-        finally:
-            self._pairing = False
-
-    async def tunnel_paired(self, event):
-        await self._complete_pairing()
+        await self._hold_or_forward(bytes_data)
 
     async def tunnel_frame(self, event):
-        if event.get("side") == self.side or self._ended_local:
-            return
-        data = event.get("data")
-        if not isinstance(data, (bytes, bytearray)):
+        data = await self._take_frame(event)
+        if data is None:
             return
         if len(data) > tun.HEADER_LEN and data[0] == tun.TYPE_DATA:
             self._note_data(len(data) - tun.HEADER_LEN, False)
-        await self.send(bytes_data=bytes(data))
+        await self.send(bytes_data=data)
 
     # -------------------------------------------------------------------------------------------- the watcher
     async def _tick(self) -> bool:
@@ -566,9 +668,11 @@ class ProbeTunnelConsoleConsumer(_TunnelConsumer):
         if now - self._connected_at >= self._cap_s:
             await self._end("hard_cap")
             return False
-        if not self._paired and not self._pairing and await self._cache_call(tun.side_attached, self.session_id, tun.SIDE_PROBE_READY, default=False):
-            await self._complete_pairing()  # a lost tunnel.paired or a failed look at connect
-        if not self._paired and now - self._connected_at >= tun.PAIR_WAIT_SECONDS:
+        if not self._paired and not self._pairing:
+            found = await self._cache_call(tun.ready_channel, self.session_id, tun.SIDE_PROBE_READY, default=None)
+            if found:
+                await self._complete_pairing(found)  # a lost tunnel.paired or a failed look at connect
+        if not self._paired and not self._pairing and now - self._connected_at >= tun.PAIR_WAIT_SECONDS:
             await self._end("probe_offline")
             return False
         if now >= self._next_flush:

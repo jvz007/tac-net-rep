@@ -176,6 +176,8 @@ All counted in the shared Django cache (Redis). With no shared cache Core refuse
 | `PAIR_WAIT_SECONDS` | 15 (the probe side must attach this soon after the Console) |
 | `BUFFER_CAP_BYTES` | 1 MiB (Console frames held before the probe side attaches) |
 | `RECHECK_SECONDS` | 300 (account, permission, module and probe re-check) |
+| `FRAMES_PER_SECOND_MAX` | 2000 messages a second on one tunnel socket, then `protocol_error` (1.18.49) |
+| `BACKSTOP_IDLE_GRACE_SECONDS` | 30 (the probe socket's own idle timer: the idle limit plus this, 1.18.49) |
 
 A slot is held from the ticket (pending) until the session ends. An entry carries an expiry (75 seconds while pending, the hard cap plus 60 seconds once open), so a leaked slot heals.
 
@@ -198,7 +200,22 @@ Core reads byte 0 and the length only. The type must be 1 to 4 and the length 5 
 
 Only DATA frames reset the tunnel's idle timer. The Console's consumer counts DATA payload bytes (the frame length minus 5): `bytes_up` is Console to probe and `bytes_down` is probe to Console. For the engineer's sign-in, only the engineer's own DATA frames (Console to probe) count as activity; output from the target does not refresh the sign-in idle timer (rule 1.8, AD-35). A session that only streams output therefore ends at the sign-in idle limit.
 
-Pairing (1.18.48): the Console is paired only once the probe's socket is in the session's group. The probe side records that moment (after it has accepted and joined the group) and then sends `tunnel.paired`. Frames the Console sends before then wait in Core's buffer (at most 1 MiB, then `probe_offline`; 15 seconds, then `probe_offline`) and go out in order the moment the probe is in the group, so the first frames after `OPEN` are never lost. The Console may wait a few milliseconds for the probe to join. No wire change: Core still reads only the type byte and the length.
+Pairing (1.18.48, symmetric from 1.18.49): a side is paired once it knows its peer's channel name. After a socket has accepted and joined the session's group it writes its ready marker (`probe_ready` or `console_ready`) with its own channel name, sends `tunnel.paired` (with its side and channel name) to the group, and then looks at the other side's marker. Either the marker or the message is seen, in both connect orders. The watcher keeps polling the peer's marker while unpaired, so a lost `tunnel.paired` cannot leave a side waiting. A channel name that does not match `^[A-Za-z0-9._!-]{1,200}$` is refused. Frames a side sends before then wait in Core's buffer (at most 1 MiB, then `probe_offline` for the Console side and `console_not_connected` for the probe side) and go out in order the moment the peer's channel is known, so the first frames after `OPEN` are never lost. The Console side also ends `probe_offline` after 15 seconds unpaired; the probe side ends `console_not_connected` when the Console is attached but its channel stays unknown for 15 seconds (or when no Console attaches within the 60 second ticket window). The 15 second check does not end a drain that is still running: the drain is bounded (1 MiB, 5 seconds a send) and ends the session itself if it fails. No wire change: Core still reads only the type byte and the length.
+
+### The relay (1.18.49)
+
+Frames travel with `channel_layer.send` to the peer's own channel name, not through the group. A group send to a channel that already holds its capacity (100 messages in Tactical's settings) is skipped without an error in channels_redis, so a frame would vanish. `send` raises `ChannelFull`, and a full channel, a send that takes over 5 seconds or any layer error ends the session `relay_overloaded`. The group carries only `tunnel.paired` and `tunnel.end`. A peer whose channel is full may miss `tunnel.end`; its watcher finds the end marker at its next tick (5 seconds), and the frames already in its channel are still delivered in order first.
+
+Each direction numbers its frames in the layer message (`seq`, 0, 1, 2 ...; it is not on the wire, so the frames to the probe and the Console are byte for byte what the other side sent). A receiver that sees any other number ends the session `relay_overloaded`. That covers what `ChannelFull` cannot: a message the layer expired after 60 seconds in the queue of a stalled consumer, a Redis flush, a repeat or a reorder. A lost last frame is noticed at the next frame or at the idle limit.
+
+Known residual: a frame sent to a peer that has already disconnected waits in Redis until the layer expires it (60 seconds). Payload bytes pass through Redis only while they are relayed (channels_redis keeps a message at most 60 seconds) and are never stored.
+
+### Limits on a tunnel socket (1.18.49)
+
+* Each socket counts its messages in a one-second window, in memory only (no cache or database call), before it looks at the frame. The `FRAMES_PER_SECOND_MAX` (2000) + 1 th message in a window ends the session `protocol_error` (close 1002, `ended_by` `core`). A 100 Mbit link carries about 400 full DATA frames a second plus ACKs.
+* Message size: Core checks the length (5 up to 5 + 32 KiB) first thing in `receive()`, but only after the server has buffered the message. Tactical 1.6.1 runs uvicorn (a service still named `daphne.service`, started without `--ws-max-size`), so the hosting stack accepts up to its default of 16 MiB per message. A 1.5.2 server runs Daphne, where no limit was verified. This is a known gap in the hosting stack, not in Core; a unit-wide `--ws-max-size` is an installer change and is not part of this release.
+* The 4403 refusal of a plain-text connection reads `X-Forwarded-Proto`. Tactical's nginx `location ~ ^/ws/` block sets `Host`, `X-Real-IP`, `X-Forwarded-For` and `X-Forwarded-Host` but not `X-Forwarded-Proto`, so on a stock server the refusal never fires. Nothing is exposed by that today: nginx serves `/ws/` on 443 only, and the probe and the Console both refuse `ws://` in their own code.
+* Backstop timers on the probe socket: once paired, the probe socket ends the session `idle_timeout` when no DATA frame has moved in either direction for the idle limit plus `BACKSTOP_IDLE_GRACE_SECONDS`, and `hard_cap` when the session record's creation time plus the cap plus `SLOT_GRACE_SECONDS` (60) has passed. Both are later than the Console's own timers, so the Console fires first in normal running. They exist for a Console worker that died without writing an end. A session ended by a backstop is written by the probe socket: the end row and `tunnel.closed` carry the Console's last flushed counters, and a live Console's own final row is dropped as a duplicate.
 
 ### Close codes
 
@@ -208,7 +225,7 @@ Pairing (1.18.48): the Console is paired only once the probe's socket is in the 
 | 4403 | Plain-text connection. |
 | 4404 | No pending session of that name (unknown, ended, or another probe's). |
 | 4409 | That side of the session is already attached. |
-| 1002 | Protocol error: a text frame, a type byte outside 1 to 4, or a bad length. |
+| 1002 | Protocol error: a text frame, a type byte outside 1 to 4, a bad length, or more than 2000 messages in a second. |
 | 1009 | Not used by the tunnel routes (an oversize frame is 1002). |
 | 1013 | Retry later: a busy or faulty server, or a relay that cannot keep up (`relay_overloaded`). |
 | 1001 | The server is going away (`server_restart`). |
@@ -219,7 +236,7 @@ Pairing (1.18.48): the Console is paired only once the probe's socket is in the 
 The close text and the `reason` of the end row and the `tunnel.closed` event come from one fixed list: `ended_by_engineer`, `ended_by_admin`, `ended_by_core`, `idle_timeout`, `hard_cap`, `target_out_of_scope`, `target_blocked_address`, `target_own_address`, `connect_failed`, `probe_offline`, `console_disconnected`, `console_not_connected`, `relay_overloaded`, `server_restart`. Core adds `protocol_error` for a frame that breaks the rules. Core only originates the reasons of its own control. The probe's `target_*` and `connect_failed` reasons pass through the owner.
 
 * Console drops: `console_disconnected` (no resume). The probe's data socket drops: `probe_offline`. No probe side within 15 seconds of the Console: `probe_offline`. No Console within the 60 second ticket window: `console_not_connected`.
-* A `group_send` that raises `ChannelFull` or takes over 5 seconds ends the session `relay_overloaded`.
+* A `send` that raises `ChannelFull`, takes over 5 seconds or fails, and a frame with the wrong sequence number, end the session `relay_overloaded`.
 * The watcher (5 second tick) ends the session `idle_timeout` or `hard_cap`, and every 5 minutes (with up to 30 seconds of jitter) re-checks the account, the permission, the module and the probe's presence or data socket. A lost right, a disabled account, a revoked session or a disabled module ends it `ended_by_core`.
 * When Core refuses a probe at its own 5-minute re-check, it ends that probe's tunnels itself, `ended_by_core`.
 
@@ -232,8 +249,8 @@ func: tunnel.closed
 payload: {session_id, reason, ended_by, bytes_up, bytes_down, source: "core"}
 ```
 
-The Console consumer sends it at its close with the final counters. When the Console never attached, whoever ended the session sends it with zero counters. The probe's own `tunnel.closed` event arrives through the normal event path; `source` tells them apart.
+The Console consumer sends it at its close with the final counters. When the Console never attached, whoever ended the session sends it with zero counters. When the probe socket's backstop ended the session, the probe socket sends it with the last flushed counters. The probe's own `tunnel.closed` event arrives through the normal event path; `source` tells them apart.
 
-Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket`, `custom:probe-tunnel-connect` (with the side), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`) and `custom:probe-tunnel-refused` (reason code). Never a ticket, key, header, payload or target address.
+Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket` (engineer, session id and permission; no target), `custom:probe-tunnel-connect` (with the side), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`) and `custom:probe-tunnel-refused` (reason code). Never a ticket, key, header, payload or target address.
 
 The end row of a session with an attached Console is written by that Console's consumer at its close, with its final counters. A server process that dies without closing its sockets leaves no end row for that session; its slot heals at its expiry.

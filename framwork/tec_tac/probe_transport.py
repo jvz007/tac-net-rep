@@ -673,7 +673,7 @@ def presence_many(probe_ids) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ audit
-TUNNEL_AUDIT_KEYS = ("engineer", "session_id", "side", "ended_by", "detail", "duration", "bytes_up", "bytes_down", "target", "permission")
+TUNNEL_AUDIT_KEYS = ("engineer", "session_id", "side", "ended_by", "detail", "duration", "bytes_up", "bytes_down", "permission")
 
 
 def _tunnel_extra(extra) -> dict:

@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.48",
+  "version": "1.18.49",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.48.md",
-      "size": 7637,
-      "sha256": "4e6cca0cab8730d4655f1cd4af7447e08dcf652f37b92ccb9f7e3cc4580c22aa"
+      "path": "RELEASE_NOTES_1.18.49.md",
+      "size": 11467,
+      "sha256": "b8d39a1a2678659d1d322719b9a4389c40bb48318d9c3133004a0dc3c5583690"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "b1985518edeefaa205899b542cf9f5d2a00e8bb9418d5d4850a86c44100d7106"
+      "sha256": "555181dcc6938fe256e0265cbaa95e0cfbc1919d6edfb1ff8d9f4e54581d55f0"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -238,8 +238,8 @@
     },
     {
       "path": "docs/probe-transport.md",
-      "size": 19868,
-      "sha256": "05d784a7c4869f539a190974d1e7b4945b6f2bffd10fda28f7ef04dab516137f"
+      "size": 24478,
+      "sha256": "edd86d5535cfa5415dc617e93c5985a29f5cc8e5ee46cc240079d204082cbbea"
     },
     {
       "path": "docs/releases/README.md",
@@ -1947,6 +1947,11 @@
       "sha256": "ccc4a66da9feb6a5a3f4ecaa1f34bc0149e1769c0cb27fdc1d3ffb1067fcdb1e"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.48.md",
+      "size": 7637,
+      "sha256": "4e6cca0cab8730d4655f1cd4af7447e08dcf652f37b92ccb9f7e3cc4580c22aa"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.5.md",
       "size": 7115,
       "sha256": "e3a83c453ee86652118e88bd703f1f737c544e01fbd59d49da188cac94c29e98"
@@ -2978,8 +2983,8 @@
     },
     {
       "path": "framwork/tec_tac/probe_transport.py",
-      "size": 57466,
-      "sha256": "66b62febe13be6fcb0e3a6c1140d6d2ea7836ff3fc5d3d17c508ef326e630eb7"
+      "size": 57456,
+      "sha256": "33d6420c87e4d4a17337046bc1830f53354bc96f8b9ccf1c51771f151741c43d"
     },
     {
       "path": "framwork/tec_tac/probe_transport_consumer.py",
@@ -2988,13 +2993,13 @@
     },
     {
       "path": "framwork/tec_tac/probe_tunnel.py",
-      "size": 36010,
-      "sha256": "b16ad0bda0c16640d1d00c737dcf586c3ca5fa20c35767bef369ff7fc474be22"
+      "size": 37833,
+      "sha256": "abebb643c76e39bccf05ed598f37164be002c2e2138a8a7bb0e89974040aecd9"
     },
     {
       "path": "framwork/tec_tac/probe_tunnel_consumer.py",
-      "size": 29927,
-      "sha256": "1b4d628bb01e8d448ce7b1678d727e49ee2db782b9dfbbf1ad52ce06486d2b5c"
+      "size": 36289,
+      "sha256": "eda890f8e524ecd608622c66212955ff3eeb26714ebd229eda453ff9024a9634"
     },
     {
       "path": "framwork/tec_tac/rbac.py",
@@ -3464,7 +3469,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "4c60f9d8831873ffc82b7433acdc7fd09d4a6687691096418bd7a3a6effbcc38"
+      "sha256": "c87a444d72e35a4fc7bad9a15967d15e3e4c5cd75a2db4dcb8c8d695d8a0d44e"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4977,6 +4982,11 @@
       "sha256": "0fd8167295989566aaac15bd0929b58213e85b4de890138b2922e3195a269a0d"
     },
     {
+      "path": "tests/legacy/version-1.18.48.py",
+      "size": 5021,
+      "sha256": "62f34475003a6c041a5f61e3533fbfd6c367061d50384ccf35cc8f81468a40c4"
+    },
+    {
       "path": "tests/legacy/version-1.18.5.py",
       "size": 2220,
       "sha256": "e51eff2844559a107e19d8aba39181aa9104312ceb406b75c3b09c433075dd02"
@@ -5713,8 +5723,13 @@
     },
     {
       "path": "tests/probe-tunnel-end-1.18.47.py",
-      "size": 19429,
-      "sha256": "2be3bf689e6eca24d0c872ccaf81ca31ecd8097d89ed74aaff2be5bf86267e66"
+      "size": 19437,
+      "sha256": "533425a66c0b418b58126faf6f298012e48644e5b1560cfe8329927cd454065f"
+    },
+    {
+      "path": "tests/probe-tunnel-hardening-1.18.49.py",
+      "size": 34360,
+      "sha256": "adf3b7c0a50463fd33949bc6a620883290647b6b676bf94f74910318e03ac970"
     },
     {
       "path": "tests/probe-tunnel-isolation-1.18.47.py",
@@ -5723,23 +5738,23 @@
     },
     {
       "path": "tests/probe-tunnel-pairing-1.18.48.py",
-      "size": 17091,
-      "sha256": "cbe3990b047bcc41ff367acdf64506c59bc0a055c2859e39839704f0a61c6098"
+      "size": 17422,
+      "sha256": "d7460e7be9d24fd5c899b3a7b4a9eec0c795dad5b4a979b5028e5b8755b86821"
     },
     {
       "path": "tests/probe-tunnel-relay-1.18.47.py",
-      "size": 28451,
-      "sha256": "89864cf3044909da594a5ad5e44321b4508248d2cb95f0b26270e2acf1f10bd0"
+      "size": 28502,
+      "sha256": "338e85695d96c92205714397ad5d8413437df5c43412d4db77e7d297ee7a36d8"
     },
     {
       "path": "tests/probe-tunnel-ticket-1.18.47.py",
-      "size": 14078,
-      "sha256": "81a7e0b49e4d20d88ba90e2d9a444e6728e6f9709d4546c0ba8f53a7dcf7d08b"
+      "size": 14073,
+      "sha256": "dbfd1ca38d58e0b1922bc38693b141cfd0b3a8dfda7131723e3dd205d69a3ef4"
     },
     {
       "path": "tests/probe_transport_harness.py",
-      "size": 17090,
-      "sha256": "148747eb0e2c9911471732cfc577b715c6e9c1a85ee4bad0b52d31ef579b8863"
+      "size": 19344,
+      "sha256": "22b352e4f11941a2fd2d1cdc1f0fb86ed63a625a3de92b934f5c0dd0ab701d86"
     },
     {
       "path": "tests/promotion-clean-1.17.68.py",
@@ -5778,8 +5793,8 @@
     },
     {
       "path": "tests/release-integrity.sh",
-      "size": 3423,
-      "sha256": "dc4a53148728789ea0d38d13771e13c665ea695608d68ce72bea3e6c2e199e6a"
+      "size": 3481,
+      "sha256": "e742d10622f9bbaf3281899dfbd3eabb6c131a63a486cb201ca87f87a0854a0c"
     },
     {
       "path": "tests/replacement-registration-statement-1.17.68.py",
@@ -8172,9 +8187,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.48.py",
-      "size": 5021,
-      "sha256": "62f34475003a6c041a5f61e3533fbfd6c367061d50384ccf35cc8f81468a40c4"
+      "path": "tests/version-1.18.49.py",
+      "size": 5215,
+      "sha256": "e768ff1567311456acb5b1e06a67589925d476b2cd6c097367683695628ad571"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

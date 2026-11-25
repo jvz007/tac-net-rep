@@ -43,6 +43,7 @@ LOCK_KEY = "tec-tac:pt:tun-lock"
 SESSION_PREFIX = "tec-tac:pt:tun:"
 SIDE_PREFIX = "tec-tac:pt:tunside:"
 SIDE_PROBE_READY = "probe_ready"  # 1.18.48: written once the probe socket is in the group; the Console pairs on this, not on the attach marker
+SIDE_CONSOLE_READY = "console_ready"  # 1.18.49: the same for the Console socket; both ready markers carry the socket's channel name
 END_PREFIX = "tec-tac:pt:tunend:"
 STATS_PREFIX = "tec-tac:pt:tunstat:"
 CLOSED_PREFIX = "tec-tac:pt:tunclosed:"
@@ -50,6 +51,7 @@ AUDITED_PREFIX = "tec-tac:pt:tunaudit:"
 TICKET_RATE_PREFIX = "tec-tac:pt:tkrate:"
 
 TICKET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")  # secrets.token_urlsafe(32) is 43 characters
+CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9._!-]{1,200}$")  # a channels specific channel name; anything else is refused
 PERMISSION_PATTERN = re.compile(r"^networkprobe\.[a-z0-9_.]{1,100}$")
 HOST_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 
@@ -86,6 +88,8 @@ RECHECK_JITTER_SECONDS = 30
 RECHECK_RETRY_SECONDS = 30
 RECHECK_GRACE_SECONDS = 300
 SEND_TIMEOUT_SECONDS = 5.0
+FRAMES_PER_SECOND_MAX = 2000  # 1.18.49: frames one tunnel socket may send in a one-second window; the next ends the session protocol_error
+BACKSTOP_IDLE_GRACE_SECONDS = 30  # 1.18.49: the probe socket's own idle timer is the Console's idle limit plus this
 
 CLOSE_PROTOCOL = 1002
 CLOSE_GOING_AWAY = 1001
@@ -422,7 +426,7 @@ def issue_ticket(request, caller: str, spec) -> dict:
     except Exception:
         logger.warning("The tunnel session index is unavailable; no ticket issued.", exc_info=True)
         return _refusal("unavailable", "unavailable", user=user, probe_id=probe_id, session_id=sid)
-    _audit("custom:probe-tunnel-ticket", probe_id, extra={"engineer": user.pk, "session_id": sid, "permission": clean["permission"], "target": clean["target_label"]})
+    _audit("custom:probe-tunnel-ticket", probe_id, extra={"engineer": user.pk, "session_id": sid, "permission": clean["permission"]})
     return {"outcome": "ok", "ticket": ticket, "launch_url": launch, "expires_in": TICKET_TTL_SECONDS, "session_id": sid}
 
 
@@ -520,10 +524,34 @@ def console_recheck(value: dict, record: dict, activity_at=None) -> str | None:
     return None
 
 
-def mark_probe_ready(session_id: str) -> None:
+def mark_probe_ready(session_id: str, channel: str | None = None) -> None:
     """Sync (the cache pool). The probe's socket calls this after it has joined the session's group, before it sends tunnel.paired. The
-    Console pairs only once this marker exists, so the first frames it sends always have a probe in the group to reach (1.18.48)."""
-    _cache().set(side_key(session_id, SIDE_PROBE_READY), {"at": time.time()}, _keep_seconds())
+    Console pairs only once this marker exists, so the first frames it sends always have a probe in the group to reach (1.18.48). From
+    1.18.49 the marker carries the socket's own channel name: frames go to that channel with send(), not to the group."""
+    _write_ready(session_id, SIDE_PROBE_READY, channel)
+
+
+def mark_console_ready(session_id: str, channel: str | None = None) -> None:
+    """Sync (the cache pool). The Console's socket, after it has joined the group and before it sends tunnel.paired (1.18.49)."""
+    _write_ready(session_id, SIDE_CONSOLE_READY, channel)
+
+
+def _write_ready(session_id: str, side: str, channel) -> None:
+    marker = {"at": time.time()}
+    if isinstance(channel, str) and CHANNEL_PATTERN.match(channel):
+        marker["channel"] = channel
+    _cache().set(side_key(session_id, side), marker, _keep_seconds())
+
+
+def clean_channel(value) -> str | None:
+    """A channel name that passes the strict pattern, or None."""
+    return value if isinstance(value, str) and CHANNEL_PATTERN.match(value) else None
+
+
+def ready_channel(session_id: str, side: str) -> str | None:
+    """Sync (the cache pool). The channel name a side published in its ready marker, or None (no marker, no name, or a malformed name)."""
+    marker = _cache().get(side_key(session_id, side))
+    return clean_channel(marker.get("channel")) if isinstance(marker, dict) else None
 
 
 def probe_open(probe_id: str, session_id: str):
@@ -538,9 +566,10 @@ def probe_open(probe_id: str, session_id: str):
 
 def poll_session(session_id: str) -> dict:
     """What a watcher asks every few seconds: {ended: marker or None, console: bool, probe: bool, ready: bool}. Cache only. probe is the
-    attach marker (the 4409 guard); ready means the probe's socket is in the group (1.18.48)."""
+    attach marker (the 4409 guard); ready means the probe's socket is in the group (1.18.48). console_channel is the Console's channel name
+    from its ready marker, or None (1.18.49)."""
     return {"ended": get_end(session_id), "console": side_attached(session_id, "console"), "probe": side_attached(session_id, "probe"),
-            "ready": side_attached(session_id, SIDE_PROBE_READY)}
+            "ready": side_attached(session_id, SIDE_PROBE_READY), "console_channel": ready_channel(session_id, SIDE_CONSOLE_READY)}
 
 
 def flush_stats(session_id: str, last_data: float, bytes_up: int, bytes_down: int) -> dict | None:

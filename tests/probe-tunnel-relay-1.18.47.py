@@ -118,7 +118,7 @@ async def case_buffer():
     sent = [frame(OPEN, 1), frame(DATA, 1, b"a" * 100), frame(DATA, 1, b"b" * 200)]
     for data in sent:
         await console.receive(bytes_data=data)
-    must(console._buffered == sum(len(d) for d in sent) and not any(m.get("type") == "tunnel.frame" for _, m in LAYER.sent), "held, not sent")
+    must(console._buffered == sum(len(d) for d in sent) and not any(m.get("type") == "tunnel.frame" for _, m in LAYER.direct), "held, not sent")
     probe = H.make_tunnel_probe(sid, clock=console._clock)
     await probe.connect()
     await H.settle(probe)
@@ -343,12 +343,12 @@ async def case_ends():
     must(await probe._tick() is True, "still inside the ticket window")
     WALL[0] += 1
     must(await probe._tick() is False and probe.close_reasons[-1] == "console_not_connected" and ended_reason(sid) == "console_not_connected", probe.close_reasons)
-    # a relay that cannot keep up: ChannelFull from group_send, and a slow layer
+    # a relay that cannot keep up: ChannelFull from send (1.18.49: frames go to the peer's channel), and a slow layer
     for problem in (H.ChannelFull(), asyncio.TimeoutError()):
         console, probe, sid, _ = await pair()
-        LAYER.fail = lambda group, message, problem=problem: problem if message.get("type") == "tunnel.frame" else None
+        LAYER.fail_send = lambda channel, message, problem=problem: problem if message.get("type") == "tunnel.frame" else None
         await console.receive(bytes_data=frame(DATA, 1, b"x"))
-        LAYER.fail = None
+        LAYER.fail_send = None
         await H.settle(console)
         must(ended_reason(sid) == "relay_overloaded" and console.closed[-1] == 1013 and console.close_reasons[-1] == "relay_overloaded", (type(problem), console.closed))
         must(probe.close_reasons[-1] == "relay_overloaded", "both sides closed")
@@ -524,7 +524,7 @@ must("json" not in text and "decode(" not in text and "struct" not in text, "the
 import re
 
 indexes = re.findall(r"data\[[^\]]*\]", text)
-must(indexes and set(indexes) == {"data[0]"} and len(indexes) == 2, ("only byte 0 is ever read", indexes))
+must(indexes and set(indexes) == {"data[0]"} and len(indexes) == 4, ("only byte 0 is ever read", indexes))
 
 
 # ---------------------------------------------------------------- planted marker bytes never appear anywhere

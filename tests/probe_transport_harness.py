@@ -161,6 +161,11 @@ class FakeLayer:
         self.groups, self.channels, self.consumers, self.counter = {}, {}, {}, 0
         self.sent = []
         self.fail = None  # 1.18.47: a function (group, message) -> an exception to raise, or None (ChannelFull, a slow layer)
+        self.fail_send = None  # 1.18.49: the same for send(channel, message)
+        self.drop_send = None  # 1.18.49: a function (channel, message) -> True to lose the message silently (an expired message, a Redis flush)
+        self.direct = []  # 1.18.49: every send() to a channel, in order: (channel, message)
+        self.held = {}  # 1.18.49: channel -> messages held for a stalled consumer; hold(channel) starts it, release(channel) delivers them
+        self.capacity = 100  # channels_redis' default channel capacity
 
     async def new_channel(self):
         self.counter += 1
@@ -174,6 +179,30 @@ class FakeLayer:
     async def group_discard(self, group, channel):
         self.groups.get(group, set()).discard(channel)
 
+    def hold(self, channel):
+        """A stalled consumer: messages to this channel wait in its queue (up to the capacity) instead of being dispatched."""
+        self.held.setdefault(channel, [])
+
+    async def release(self, channel):
+        """The consumer wakes up and handles what waited, in order."""
+        queued = self.held.pop(channel, [])
+        for message in queued:
+            consumer = self.consumers.get(channel)
+            if consumer is not None:
+                await getattr(consumer, message["type"].replace(".", "_"))(message)
+        return len(queued)
+
+    async def _deliver(self, channel, message):
+        if channel in self.held:
+            if len(self.held[channel]) >= self.capacity:
+                return False  # a full channel
+            self.held[channel].append(message)
+            return True
+        consumer = self.consumers.get(channel)
+        if consumer is not None:
+            await getattr(consumer, message["type"].replace(".", "_"))(message)
+        return True
+
     async def group_send(self, group, message):
         if self.fail is not None:
             problem = self.fail(group, message)
@@ -181,11 +210,25 @@ class FakeLayer:
                 raise problem
         self.sent.append((group, message))
         for channel in sorted(self.groups.get(group, ())):
-            consumer = self.consumers.get(channel)
-            if consumer is not None:
-                await getattr(consumer, message["type"].replace(".", "_"))(message)
+            await self._deliver(channel, message)  # channels_redis: a full channel is skipped without an error
 
     async def send(self, channel, message):
+        if self.fail_send is not None:
+            problem = self.fail_send(channel, message)
+            if problem is not None:
+                raise problem
+        self.direct.append((channel, message))
+        if self.drop_send is not None and self.drop_send(channel, message):
+            return
+        if channel in self.held:
+            if len(self.held[channel]) >= self.capacity:
+                raise ChannelFull()
+            self.held[channel].append(message)
+            return
+        consumer = self.consumers.get(channel)
+        if consumer is not None:
+            await getattr(consumer, message["type"].replace(".", "_"))(message)
+            return
         self.channels.setdefault(channel, asyncio.Queue()).put_nowait(message)
 
     async def receive(self, channel):
@@ -302,6 +345,9 @@ def reset():
     LAYER.channels.clear()
     LAYER.consumers.clear()
     LAYER.sent.clear()
+    LAYER.direct.clear()
+    LAYER.held.clear()
+    LAYER.fail_send = LAYER.drop_send = None
     LAYER_ENABLED[0] = True
     REGISTRY["plugins"] = []
     REGISTRY["enabled"] = True

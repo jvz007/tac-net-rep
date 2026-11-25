@@ -146,11 +146,11 @@ async def case_drain_order():
         return True
 
     console._forward = slow_forward
-    drain = asyncio.ensure_future(console._complete_pairing())
+    drain = asyncio.ensure_future(console._complete_pairing("specific.tprobe"))
     await started.wait()
     must(not console._paired and console._pairing, "the drain is running and the Console is not paired yet")
     await console.receive(bytes_data=late)  # arrives during the drain
-    again = asyncio.ensure_future(console._complete_pairing())  # a second trigger (a connect-time look, a tick) does not start a second drain
+    again = asyncio.ensure_future(console._complete_pairing("specific.tprobe"))  # a second trigger (a connect-time look, a tick) does not start a second drain
     await asyncio.sleep(0)
     await again
     must(seen == [], "no second drain ran")
@@ -230,7 +230,7 @@ async def case_lost_paired():
     probe = H.make_tunnel_probe(sid, clock=clock)
     await probe.connect()
     await H.settle(probe)
-    real = tun.side_attached
+    real = tun.ready_channel
     calls = {"n": 0}
 
     def flaky(session_id, side):
@@ -239,7 +239,7 @@ async def case_lost_paired():
             raise ConnectionError("cache blip")
         return real(session_id, side)
 
-    tun.side_attached = flaky
+    tun.ready_channel = flaky
     try:
         await console.connect()
         await H.settle(console)
@@ -247,7 +247,7 @@ async def case_lost_paired():
         clock.now += tun.WATCH_TICK_SECONDS
         must(await console._tick() is True and console._paired, "the watcher pairs on the next tick")
     finally:
-        tun.side_attached = real
+        tun.ready_channel = real
 
 
 run(case_lost_paired())
@@ -277,8 +277,10 @@ def case_source():
         must('"probe"' not in call and "'probe'" not in call, "the Console must not read the probe attach marker: " + call)
     must(console_part.count("SIDE_PROBE_READY") == 2, "the Console reads the ready marker at connect and in its watcher")
     probe_part = text[text.index("class ProbeTunnelProbeConsumer"):text.index("class ProbeTunnelConsoleConsumer")]
-    must(probe_part.index("group_add") < probe_part.index("mark_probe_ready") < probe_part.index('"type": "tunnel.paired"'),
-         "the probe marks itself ready after group_add and before tunnel.paired")
+    must(probe_part.index("group_add") < probe_part.index("_announce_ready(tun.mark_probe_ready"), "the probe announces itself after group_add")
+    base_part = text[text.index("async def _announce_ready"):text.index("# ----", text.index("async def _announce_ready"))]
+    must(base_part.index("self._cache_call(mark") < base_part.index('"type": "tunnel.paired"') < base_part.index("tun.ready_channel"),
+         "a side marks itself ready before tunnel.paired, and looks at the peer's marker after it")
     must("data[0]" in text and set(re.findall(r"data\[[^\]]*\]", text)) == {"data[0]"}, "Core still reads only byte 0")
 
 
