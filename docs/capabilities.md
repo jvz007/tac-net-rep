@@ -306,6 +306,10 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 `core.endpoint_transport` 1.0.0 (framework >=1.17.90) is the endpoint agent websocket: `register_owner`, `request`, `send_many` and `presence`, for the one owning module `endpoint-comms` only (Core verifies the caller; `nats-comms` is accepted until the dev server has moved). See `docs/endpoint-transport.md`.
 
+## Core probe transport
+
+`core.probe_transport` 1.0.0 (framework >=1.18.46) is the Network Probe websocket `/ws/tfd/network-probe/`: `register_owner`, `request`, `send`, `presence` and `disconnect`, for the one owning module `networkprobe` only (Core verifies the caller). It shares no code, cache key, group or credential with the endpoint transport. See `docs/probe-transport.md`.
+
 ## Core agent downloads
 
 `core.agent_downloads` 1.0.0 (framework >=1.18.37) hands one file a verified module owns to one device over HTTPS: `grant_download` and `revoke_download`. Any enabled extension may use it for its own files only (Core verifies the caller). The device proves itself with its agent token and agent id. Since 1.1.0 (framework >=1.18.39, additive) Endpoint Agent Management alone may also `publish_installer` and `unpublish_installer`: one public `.msi` at `GET /api/tfd/endpoint-agent/installer.msi`, served without sign-in and re-hashed at every download. See `docs/agent-downloads.md`.

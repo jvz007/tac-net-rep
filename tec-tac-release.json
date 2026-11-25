@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.45",
+  "version": "1.18.46",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.45.md",
-      "size": 7339,
-      "sha256": "3f99545c942d8ab6faf4dcdb93f1bbd8f69d30e546e1c240676748d88459a68f"
+      "path": "RELEASE_NOTES_1.18.46.md",
+      "size": 11427,
+      "sha256": "d3eab15715cb7f803b705d9b58f73cabb85bf9b9e4c41bbb56ce4506d054fe47"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "c1fce1eac22c2888a1eef941df07a8dd1034741fcda04257009edce64fe4c597"
+      "sha256": "f4a2b25023dab41194956e9813ef93f1319e705fdfe46dc6062199a3c41306b5"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -83,8 +83,8 @@
     },
     {
       "path": "docs/capabilities.md",
-      "size": 18976,
-      "sha256": "8c50dbb737e742a9e08ce1a420772af7c29f49cfb6fd9166c20fb8c7367982cc"
+      "size": 19364,
+      "sha256": "b06dd6556f916b403254fb32c88a67c3394225e7a5d4791acbc06e0979bc7640"
     },
     {
       "path": "docs/client-address.md",
@@ -235,6 +235,11 @@
       "path": "docs/plugin-registry-cache.md",
       "size": 2490,
       "sha256": "2774a1412d7c6d12e244bc8380c163a0d4a2a7ac4b3762d901d64be8d37a141d"
+    },
+    {
+      "path": "docs/probe-transport.md",
+      "size": 8041,
+      "sha256": "231e822a0dc04dec5e1c410d9e6d41bb288f9539ba2ec0ac6c63e213fe538e78"
     },
     {
       "path": "docs/releases/README.md",
@@ -1927,6 +1932,11 @@
       "sha256": "d309af933ff68113470f10004201006c46c59a5822ab634a4767e212aa1f7912"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.45.md",
+      "size": 7339,
+      "sha256": "3f99545c942d8ab6faf4dcdb93f1bbd8f69d30e546e1c240676748d88459a68f"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.5.md",
       "size": 7115,
       "sha256": "e3a83c453ee86652118e88bd703f1f737c544e01fbd59d49da188cac94c29e98"
@@ -2343,13 +2353,13 @@
     },
     {
       "path": "framwork/tec_tac/apps.py",
-      "size": 14192,
-      "sha256": "08b07f7a858b1a15f9c00dc16a3d35e1c59eb38c20e7b77642d0a827f2c1566b"
+      "size": 15105,
+      "sha256": "22cea31e9b25f1053f515ee7ef1e5c117117ae89727b46d768bf08b48f161975"
     },
     {
       "path": "framwork/tec_tac/audit.py",
-      "size": 48085,
-      "sha256": "e41d9017941513ffb7ed48c7ab6cb91cdaf58e27e312c7fd66da5fd96611a700"
+      "size": 49512,
+      "sha256": "cf789dbcc460812b76c32a662c342e39f2ef7150f2963a2a1a128f9cf7c191c5"
     },
     {
       "path": "framwork/tec_tac/audit_views.py",
@@ -2398,8 +2408,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 548602,
-      "sha256": "4cba6e41e2ef29789b7d15bb58f44792ed4403c40789dacc7e01c5a4f9099cb5"
+      "size": 551915,
+      "sha256": "beff0d0bb42a36ebf236b99e8b9e48fdd675b4bf8bb45106fc513d92821bf2ab"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -2957,6 +2967,16 @@
       "sha256": "674535051da3d0bf0797b9bffb700f10ebd068cabd09e6ae48a6f50e3af0810c"
     },
     {
+      "path": "framwork/tec_tac/probe_transport.py",
+      "size": 45039,
+      "sha256": "8479ecbb287c98fae0b3ac402017574afb46831be0492365699e1d59929fbdfc"
+    },
+    {
+      "path": "framwork/tec_tac/probe_transport_consumer.py",
+      "size": 18347,
+      "sha256": "09c5c586a42f88badadef5693962b8ed064ab8e4a860ed5b155e09b1c3b7ddf9"
+    },
+    {
       "path": "framwork/tec_tac/rbac.py",
       "size": 13418,
       "sha256": "0f730f7e6ce4ce39447b2e97a43334fbfeef0ed4172ae9c12fa078c76770f9a0"
@@ -3424,7 +3444,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "3705b3a36817c9f0475c73039d395cc7cbe43399adfabc4843fee8aa9d007496"
+      "sha256": "008e14aae9abbcfa4eab397f68aae9325c530b0ed5aa5800fdd26a9bc9ea00b8"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4922,6 +4942,11 @@
       "sha256": "d2be6c627ed0727099e539299fbf8658f2b21440f495828e3b2bb0cbc8a634b7"
     },
     {
+      "path": "tests/legacy/version-1.18.45.py",
+      "size": 4861,
+      "sha256": "2e3186e9755c0f48b01950800c74d249436aed973b4b394c0b092c864cf1ee81"
+    },
+    {
       "path": "tests/legacy/version-1.18.5.py",
       "size": 2220,
       "sha256": "e51eff2844559a107e19d8aba39181aa9104312ceb406b75c3b09c433075dd02"
@@ -5627,6 +5652,36 @@
       "sha256": "b93298b2b99913f3cc32ba9b11766b4c14acbcd60f53a9b940b83b91983f39b2"
     },
     {
+      "path": "tests/probe-transport-consumer-1.18.46.py",
+      "size": 18555,
+      "sha256": "6e30c0c40bed68f44929a92031bca84a297953e6e7577e14f2eee55136277235"
+    },
+    {
+      "path": "tests/probe-transport-contract-1.18.46.py",
+      "size": 8102,
+      "sha256": "9a4485d92fec9bfaf8bd74eb8094b728c804de4dde27245ab5c30d0db41c3e83"
+    },
+    {
+      "path": "tests/probe-transport-docs-1.18.46.py",
+      "size": 3248,
+      "sha256": "5cefc5899311e80fcfd92a5e55906545c09fd0fd3e7109c3252a28f55bb469e2"
+    },
+    {
+      "path": "tests/probe-transport-identity-1.18.46.py",
+      "size": 14240,
+      "sha256": "9d8e27ea9b463a6055c79d11fbfb705a9099093d8ab5b1259d1addcfc6d2b72d"
+    },
+    {
+      "path": "tests/probe-transport-isolation-1.18.46.py",
+      "size": 7225,
+      "sha256": "c76eab9d11c0d07996bbb194cb7eb51bbc4f9570ea4201c8822dd028fbc50081"
+    },
+    {
+      "path": "tests/probe_transport_harness.py",
+      "size": 12411,
+      "sha256": "50cd64e389f237956d5f26d7da52a4ad6a002dddc357e23ca0f98141cd12c212"
+    },
+    {
       "path": "tests/promotion-clean-1.17.68.py",
       "size": 2730,
       "sha256": "43e4845376e9597280bd4ad820015c4d66f22cd854c667e0e86b8eff3309846b"
@@ -5663,8 +5718,8 @@
     },
     {
       "path": "tests/release-integrity.sh",
-      "size": 2790,
-      "sha256": "cfaca441f5df4e6a0bb8bccbefcd23160e87ff1a32e62118c0c4636c98642076"
+      "size": 3087,
+      "sha256": "293d429428e8392faec4a372e0f33daf0f83443df8b7a998b0df0ebf1c7c2e86"
     },
     {
       "path": "tests/replacement-registration-statement-1.17.68.py",
@@ -8057,9 +8112,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.45.py",
-      "size": 4861,
-      "sha256": "2e3186e9755c0f48b01950800c74d249436aed973b4b394c0b092c864cf1ee81"
+      "path": "tests/version-1.18.46.py",
+      "size": 4879,
+      "sha256": "36dcf8d9e636aaf422ecf1c2048c8d05e0b9713642a24841b44d35013f26f8b0"
     },
     {
       "path": "tests/version-rebuild-ordering.py",

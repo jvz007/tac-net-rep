@@ -384,6 +384,8 @@ SERVER_PROVENANCE_TACTICAL_OPERATION = "tactical-operation"
 SERVER_PROVENANCE_TACTICAL_WEBSOCKET = "tactical-websocket"
 # 1.17.90: provenance of the rows Core writes for the endpoint agent socket (tec_tac.endpoint_transport). Core-only.
 SERVER_PROVENANCE_ENDPOINT_TRANSPORT = "endpoint-transport"
+# 1.18.46: provenance of the rows Core writes for the Network Probe socket (tec_tac.probe_transport). Core-only.
+SERVER_PROVENANCE_PROBE_TRANSPORT = "probe-transport"
 # 1.18.37: provenance of the rows Core writes for an agent file download (tec_tac.agent_downloads). Core-only.
 SERVER_PROVENANCE_AGENT_DOWNLOADS = "agent-downloads"
 # Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
@@ -889,6 +891,30 @@ def _record_endpoint_transport(
     return _record_row(
         actor=actor, module_id="core", action=action, object_type="agent", object_id=agent_id,
         message=message, metadata=metadata, strict=False, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
+    )
+
+
+def _record_probe_transport(
+    *,
+    action: str,
+    probe_id: str | None = None,
+    message: Any = None,
+    metadata: dict | None = None,
+    refusal: bool = False,
+) -> dict[str, Any]:
+    """Write a row for the Network Probe socket Core runs (1.18.46). Private: only tec_tac.probe_transport calls it. Never strict.
+
+    The module is core and the actor is the probe-transport service. The object is the probe (object_type probe, object_id the probe id when
+    it is a valid one). The client and site the owner reported are in the metadata. The row carries operation_context.server_provenance =
+    probe-transport. ``refusal`` adds core_refusal = true. Callers pass only the fields listed in docs/probe-transport.md: never a key, an
+    Authorization header or a frame payload.
+    """
+    context = {"server_provenance": SERVER_PROVENANCE_PROBE_TRANSPORT}
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=service_audit_actor(module_id="core", service="probe-transport"), module_id="core", action=action, object_type="probe",
+        object_id=probe_id, message=message, metadata=metadata, strict=False, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
     )
 
 

@@ -46,6 +46,13 @@ class TecTacFrameworkConfig(AppConfig):
             register_core_endpoint_transport_capability()
         except Exception:
             logger.exception("Tec-Tac core.endpoint_transport capability registration failed")
+        # 1.18.46: core.probe_transport (the Network Probe transport, for the owning module networkprobe only). Guarded like the others.
+        try:
+            from .probe_transport import register_core_probe_transport_capability
+
+            register_core_probe_transport_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.probe_transport capability registration failed")
         # 1.18.37: core.agent_downloads (a short, device-bound download link for a file a verified module owns). Guarded like the others.
         try:
             from .agent_downloads import register_core_agent_downloads_capability
@@ -243,3 +250,12 @@ class TecTacFrameworkConfig(AppConfig):
                 raise_open_file_limit()
         except Exception:
             logger.exception("Tec-Tac endpoint agent socket route installation failed")
+
+        # 1.18.46: the Network Probe socket ws/tfd/network-probe/ (AD-54, C1). Its own guarded block, apart from the agent route: a fault here is
+        # logged and start-up goes on, and a fault in the consumer later closes the socket 4503 and never stops Tactical.
+        try:
+            from .probe_transport import install_probe_route
+
+            install_probe_route()
+        except Exception:
+            logger.exception("Tec-Tac network probe socket route installation failed")
