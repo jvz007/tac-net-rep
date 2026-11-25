@@ -1,10 +1,10 @@
-# Network Probe transport (Core 1.18.46)
+# Network Probe transport (Core 1.18.47)
 
-Core 1.18.46 adds one websocket for the Network Probe and one contract for the module that owns it. The capability is `core.probe_transport` 1.0.0. It needs framework 1.18.46 or later.
+Core 1.18.46 added one websocket for the Network Probe and one contract for the module that owns it. Core 1.18.47 adds the tunnel to it. The capability is `core.probe_transport`: 1.0.0 is the control channel (framework 1.18.46 or later) and 1.1.0 adds the tunnel (framework 1.18.47 or later). 1.1.0 is additive: nothing in 1.0.0 changed.
 
 Core owns the connection and its security. The module `networkprobe` owns who a probe is, what the messages mean and the probe record. Core never reads `func`.
 
-This is C1 of the probe channel plan. The tunnel relay and the Engineer Console ticket (C2) are a later release and are not in this one. The probe route shares no code, cache key, group, pool, audit action or credential with the endpoint agent route (AD-54). An agent token never reaches the probe authenticator, and a probe key never reaches Tactical.
+C1 of the probe channel plan is the control channel (1.0.0). C2 is the tunnel (1.1.0): the Engineer Console ticket, two data routes, the relay and their limits (see "The tunnel (contract 1.1.0)" below). No contract file for 1.18.47 exists in `docs/contracts` yet: the export runs on the dev server after this release is signed. The probe route shares no code, cache key, group, pool, audit action or credential with the endpoint agent route (AD-54). An agent token never reaches the probe authenticator, and a probe key never reaches Tactical.
 
 ## What you get
 
@@ -116,4 +116,122 @@ The client and site the owner reported are in the metadata. There are no per-eve
 
 ## What Core does not do
 
-Core does not interpret messages, keep a probe record, store events, check a person's scope, relay tunnels or run module code. The tunnel relay and the Console ticket are a later release (C2). Agent and probe credentials never cross.
+Core does not interpret messages, keep a probe record, store events, check a person's scope or port rules, read tunnel stream ids, windows or payloads, or run module code. Agent and probe credentials never cross.
+
+## Fleet size and pools
+
+The pools are sized for up to 500 connected probes. A reconnect storm after a server restart is spread by the probe's jittered back-off (1 second doubling to 5 minutes), and the pools are sized for that. The tunnel routes use the same pools, with a limit of 50 concurrent tunnel sessions.
+
+| Pool | Threads and backlog (`POOL_SPECS`) |
+|---|---|
+| `auth` | `(6, 256)` |
+| `recheck` | `(2, 4096)` |
+| `cache` | `(6, 2000)` |
+| `audit` | `(3, 800)` |
+| `handover` | `(2, 64)` |
+
+`UNAUTHENTICATED_IN_FLIGHT` is 64: at most 64 connects, on the control route and on both tunnel routes together, may be between their first byte and their identity answer. A connect over it is answered 1013 at once and counted nowhere, so a flood spread over many addresses cannot make real probes queue behind it. A frame that is not valid JSON (including 15000 nested `[`, which raises `RecursionError`) counts as one bad frame.
+
+## The tunnel (contract 1.1.0)
+
+`core.probe_transport` 1.1.0 needs framework 1.18.47 or later. It lets an engineer reach a device behind a Network Probe through a desktop tool, the Engineer Console, with Core relaying the traffic. Core checks the engineer's account and permission and relays frames. It never reads, logs, audits or stores what the frames carry. `networkprobe` decides which device and port an engineer may reach; Core does not.
+
+Four operations, for `networkprobe` only (Core verifies the caller; `module_id` must equal it). All are sync.
+
+| Operation | Returns |
+|---|---|
+| `issue_tunnel_ticket(request, module_id, spec)` | `{outcome: ok, ticket, launch_url, expires_in: 60, session_id}` or `{outcome: denied, invalid, rate_limited, limit_reached, probe_offline, session_exists or unavailable, code, message}`. `request` is the engineer's signed-in Tec-Tac request. |
+| `end_tunnel(module_id, session_id, ended_by)` | `{outcome: ok, invalid, denied or unavailable, already_ended}`. `ended_by` is `engineer`, `admin` or `core`. |
+| `end_tunnels_for_probe(module_id, probe_id, reason)` | `{outcome, ended: [session ids]}`. `reason` is `ended_by_core`, `probe_offline`, `server_restart` or a 1.0.0 disconnect reason. |
+| `tunnel_status(module_id, session_ids=None, probe_id=None)` | `{outcome, sessions: {id: {state, probe_id, started, last_data, console_connected, probe_connected, bytes_up, bytes_down, reason, ended_by}}}`. Up to 200 ids, cache only. `state` is `pending`, `open`, `ended` or `unknown`. |
+
+### The ticket
+
+`spec` is `{session_id, probe_id, permission, target_label, idle_s, cap_s}`:
+
+* `session_id` is a uuid4 string. One ticket per session and no resume: a second ticket for the same id is refused (`session_exists`), even after the session ended.
+* `permission` is a `networkprobe.` permission code the engineer must hold. Core checks it again at connect and every 5 minutes.
+* `target_label` is audit text only (at most 128 characters).
+* `idle_s` is 60 to 900 (default 900). `cap_s` is 60 to 14400 (default 14400).
+
+Core checks, in this order: a signed-in request with a live Knox digest, the spec, the permission, the probe's presence (an offline probe is refused, so no slot is spent), the ticket rate, then the slots. The ticket is `secrets.token_urlsafe(32)`, 43 characters. Only its SHA-256 is stored, under its own cache prefix, for `TICKET_TTL_SECONDS` (60) and it works once. Every refusal writes one deny row (`custom:probe-tunnel-refused`) and never holds the ticket.
+
+The launch link is `tectac-console://open?host=<server host>&ticket=<ticket>`. The host comes from the request, lower case, without port 443.
+
+The owner's order: check the engineer's scope and the port rules, call `issue_tunnel_ticket`, then ask the probe for `tunnel.open` with `request()` or `send()`, and hand the engineer the link. Core never sends `tunnel.open` and never reads `func`. Call `end_tunnels_for_probe` when a probe is disabled or revoked. `disconnect()` does not end tunnels by itself.
+
+### Limits
+
+All counted in the shared Django cache (Redis). With no shared cache Core refuses to issue a ticket (`unavailable`).
+
+| Limit | Value |
+|---|---|
+| `MAX_SESSIONS` | 50 live sessions |
+| `MAX_SESSIONS_PER_PROBE` | 5 |
+| `MAX_SESSIONS_PER_ENGINEER` | 3 |
+| `TICKETS_PER_MINUTE` | 10 per engineer |
+| `TICKET_TTL_SECONDS` | 60 |
+| `IDLE_SECONDS_MAX` | 900 (15 minutes with no DATA frame) |
+| `CAP_SECONDS_MAX` | 14400 (4 hours, hard cap) |
+| `PAIR_WAIT_SECONDS` | 15 (the probe side must attach this soon after the Console) |
+| `BUFFER_CAP_BYTES` | 1 MiB (Console frames held before the probe side attaches) |
+| `RECHECK_SECONDS` | 300 (account, permission, module and probe re-check) |
+
+A slot is held from the ticket (pending) until the session ends. An entry carries an expiry (75 seconds while pending, the hard cap plus 60 seconds once open), so a leaked slot heals.
+
+### The two data routes
+
+Both are binary only: a text frame is a protocol error (close 1002). No Origin rule (native clients). A plain-text connection is refused 4403. Core accepts first and then closes with the code and the reason name as the websocket close text.
+
+| Route | Headers |
+|---|---|
+| `wss://<host>/ws/tfd/probe-tunnel/` (Console) | `Authorization: Ticket <43 characters>` |
+| `wss://<host>/ws/tfd/network-probe/tunnel/` (probe) | `Authorization: Probe <probe_id>.<key>` and `X-Tunnel-Session: <uuid>` |
+
+The Console side redeems its ticket once. Core re-checks the account at connect: the user is active and not blocked, the Knox token is live, the Tec-Tac session is not revoked, idle or past its lifetime (the engineer's idle and absolute sign-in limits apply to a live tunnel, and DATA frames count as activity), the permission is held and the module is enabled. The probe side goes through the same identity check and failure counters as the control route, and its session must be a pending session of that probe. A `Ticket` or `Token` header on the probe route, and a `Probe` or `Token` header on the Console route, is refused 4401 (`wrong_scheme`) and never reaches an authenticator. One Console side and one probe side per session.
+
+### Frames
+
+One binary websocket message is one frame: `[type u8][stream u32 BE][payload]`. `OPEN` is 1, `DATA` 2, `ACK` 3 and `CLOSE` 4 (its payload is one reason byte). Stream id 0 is never used. A DATA payload is at most `MAX_DATA` (32 KiB). Each stream has a `STREAM_WINDOW` of 128 KiB, a session has at most `MAX_STREAMS` (8) streams and `SESSION_IN_FLIGHT` is 1 MiB per direction. Those are the two ends' rules (the end-to-end window already bounds the sender).
+
+Core reads byte 0 and the length only. The type must be 1 to 4 and the length 5 up to 5 + 32768. Anything else, and any text frame, ends the session with close 1002. Core never parses stream ids, windows or payloads and never logs them.
+
+Only DATA frames reset the idle timer. The Console's consumer counts DATA payload bytes (the frame length minus 5): `bytes_up` is Console to probe and `bytes_down` is probe to Console.
+
+### Close codes
+
+| Code | Meaning on the tunnel routes |
+|---|---|
+| 4401 | Ticket unknown, used or expired; the account, permission or module check failed; the probe's identity was refused. |
+| 4403 | Plain-text connection. |
+| 4404 | No pending session of that name (unknown, ended, or another probe's). |
+| 4409 | That side of the session is already attached. |
+| 1002 | Protocol error: a text frame, a type byte outside 1 to 4, or a bad length. |
+| 1009 | Not used by the tunnel routes (an oversize frame is 1002). |
+| 1013 | Retry later: a busy or faulty server, or a relay that cannot keep up (`relay_overloaded`). |
+| 1001 | The server is going away (`server_restart`). |
+| 4503 | No owner has registered, no channel layer, or the tunnel consumer could not be loaded. Tactical itself still runs. |
+
+### Close reasons
+
+The close text and the `reason` of the end row and the `tunnel.closed` event come from one fixed list: `ended_by_engineer`, `ended_by_admin`, `ended_by_core`, `idle_timeout`, `hard_cap`, `target_out_of_scope`, `target_blocked_address`, `target_own_address`, `connect_failed`, `probe_offline`, `console_disconnected`, `console_not_connected`, `relay_overloaded`, `server_restart`. Core adds `protocol_error` for a frame that breaks the rules. Core only originates the reasons of its own control. The probe's `target_*` and `connect_failed` reasons pass through the owner.
+
+* Console drops: `console_disconnected` (no resume). The probe's data socket drops: `probe_offline`. No probe side within 15 seconds of the Console: `probe_offline`. No Console within the 60 second ticket window: `console_not_connected`.
+* A `group_send` that raises `ChannelFull` or takes over 5 seconds ends the session `relay_overloaded`.
+* The watcher (5 second tick) ends the session `idle_timeout` or `hard_cap`, and every 5 minutes (with up to 30 seconds of jitter) re-checks the account, the permission, the module and the probe's presence or data socket. A lost right, a disabled account, a revoked session or a disabled module ends it `ended_by_core`.
+* When Core refuses a probe at its own 5-minute re-check, it ends that probe's tunnels itself, `ended_by_core`.
+
+### End, events and audit
+
+An end is written once: the first caller wins. Both data sockets close at once, the probe gets a `tunnel.close` event frame `{session_id, reason, ended_by}` on its control channel (so it drops its target connection even when the data socket is slow; an offline probe still has its data side closed), and one `tunnel.closed` event reaches the owner's event task as `(probe_id, frame)`:
+
+```
+func: tunnel.closed
+payload: {session_id, reason, ended_by, bytes_up, bytes_down, source: "core"}
+```
+
+The Console consumer sends it at its close with the final counters. When the Console never attached, whoever ended the session sends it with zero counters. The probe's own `tunnel.closed` event arrives through the normal event path; `source` tells them apart.
+
+Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket`, `custom:probe-tunnel-connect` (with the side), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`) and `custom:probe-tunnel-refused` (reason code). Never a ticket, key, header, payload or target address.
+
+The end row of a session with an attached Console is written by that Console's consumer at its close, with its final counters. A server process that dies without closing its sockets leaves no end row for that session; its slot heals at its expiry.

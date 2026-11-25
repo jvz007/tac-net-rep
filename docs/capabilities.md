@@ -308,7 +308,7 @@ Capability providers may also be owned directly by Tec-Tac Core rather than an i
 
 ## Core probe transport
 
-`core.probe_transport` 1.0.0 (framework >=1.18.46) is the Network Probe websocket `/ws/tfd/network-probe/`: `register_owner`, `request`, `send`, `presence` and `disconnect`, for the one owning module `networkprobe` only (Core verifies the caller). It shares no code, cache key, group or credential with the endpoint transport. See `docs/probe-transport.md`.
+`core.probe_transport` 1.1.0 is the Network Probe websocket `/ws/tfd/network-probe/` and, since 1.1.0 (framework >=1.18.47, additive), the Engineer Console tunnel. 1.0.0 (framework >=1.18.46): `register_owner`, `request`, `send`, `presence` and `disconnect`. 1.1.0 (framework >=1.18.47): `issue_tunnel_ticket`, `end_tunnel`, `end_tunnels_for_probe` and `tunnel_status`, and the two tunnel routes `/ws/tfd/probe-tunnel/` (Console) and `/ws/tfd/network-probe/tunnel/` (probe). For the one owning module `networkprobe` only (Core verifies the caller). It shares no code, cache key, group or credential with the endpoint transport. See `docs/probe-transport.md`.
 
 ## Core agent downloads
 

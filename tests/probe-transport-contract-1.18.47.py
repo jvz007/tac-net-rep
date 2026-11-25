@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""1.18.46 regression: the contract core.probe_transport 1.0.0 (register_owner, request, send, presence, disconnect).
+"""1.18.47 regression: the contract core.probe_transport 1.1.0 (the five 1.0.0 operations unchanged, and issue_tunnel_ticket, end_tunnel,
+end_tunnels_for_probe, tunnel_status added; the 1.18.46 contract test, updated).
 
 Covered (the real probe_transport.py under the stubs of tests/probe_transport_harness.py; contracts.py and audit.py need Django, so their
-source is read with ast): the five CORE_CONTRACTS rows exist, point at functions of tec_tac.probe_transport and agree with
+source is read with ast): the nine CORE_CONTRACTS rows exist, point at functions of tec_tac.probe_transport and agree with
 probe_transport_contract_metadata() (operations, version 1.0.0, owner networkprobe); the capability registers once with the five operations
 and its metadata; apps.py wires the registration and the route in their own guarded blocks; _record_probe_transport writes provenance
 probe-transport, object type probe, never strict, core_refusal only for a refusal, and never a key.
@@ -26,9 +27,21 @@ logging.getLogger("tec_tac.probe_transport").addHandler(logging.NullHandler())
 logging.getLogger("tec_tac.probe_transport").propagate = False  # the last case logs a warning on purpose
 APP = H.APP
 
-OPERATIONS = ["register_owner", "request", "send", "presence", "disconnect"]
+OPERATIONS_1_0_0 = ["register_owner", "request", "send", "presence", "disconnect"]
+TUNNEL_OPERATIONS = ["issue_tunnel_ticket", "end_tunnel", "end_tunnels_for_probe", "tunnel_status"]
+OPERATIONS = OPERATIONS_1_0_0 + TUNNEL_OPERATIONS
+tun = H.tun
 meta = pt.probe_transport_contract_metadata()
-must(meta["id"] == "core.probe_transport" and meta["version"] == "1.0.0" and pt.CAPABILITY_VERSION == "1.0.0", "id and version")
+must(meta["id"] == "core.probe_transport" and meta["version"] == "1.1.0" and pt.CAPABILITY_VERSION == "1.1.0", "id and version")
+must(len(OPERATIONS) == 9 and list(pt.OPERATIONS) == OPERATIONS, "nine operations")
+must("1.1.0 (Core 1.18.47, framework >=1.18.47)" in meta["added_in"] and "1.0.0 (Core 1.18.46)" in meta["added_in"] and "Additive" in meta["added_in"], meta["added_in"])
+tunnel = meta["tunnel"]
+must(tunnel["close_reasons"] == list(tun.ALL_REASONS) and len(tun.END_REASONS) == 14, "the fixed reason list")
+must(tunnel["limits"]["sessions"] == 50 and tunnel["limits"]["sessions_per_probe"] == 5 and tunnel["limits"]["sessions_per_engineer"] == 3
+     and tunnel["limits"]["tickets_per_engineer_per_minute"] == 10 and tunnel["limits"]["idle_seconds"] == 900 and tunnel["limits"]["hard_cap_seconds"] == 14400, tunnel["limits"])
+must("/ws/tfd/probe-tunnel/" in tunnel["routes"]["console"] and "/ws/tfd/network-probe/tunnel/" in tunnel["routes"]["probe"], "the two routes")
+for needle in ("4401", "4403", "4404", "4409", "1002", "1013", "1001", "4503"):
+    must(needle in tunnel["close_codes"], "tunnel close code " + needle)
 must(meta["operations"] == OPERATIONS, meta["operations"])
 must("networkprobe" in meta["owner"] and pt.OWNER_MODULES == ("networkprobe",), "the one owner")
 for needle in ("4401", "4403", "4400", "4409", "4408", "4429", "4503", "1009", "1013"):
@@ -51,16 +64,21 @@ def literal_assignment(path, target):
 
 rows = [r for r in literal_assignment(APP / "contracts.py", "CORE_CONTRACTS") if r.get("area") == "probe-transport"]
 must(sorted(r["name"] for r in rows) == sorted(OPERATIONS), [r["name"] for r in rows])
+must(len(rows) == 9, "nine rows")
 all_rows = literal_assignment(APP / "contracts.py", "CORE_CONTRACTS")
 must(len({(r["import_path"], r["name"]) for r in all_rows}) == len(all_rows), "no duplicate contract rows")
 for row in rows:
     must(row["import_path"] == "tec_tac.probe_transport" and row["kind"] == "python" and row["audience"] == "backend/premium-owner", row)
-    must("added 1.18.46" in row["purpose"] and "core.probe_transport 1.0.0" in row["purpose"] and "framework >=1.18.46" in row["purpose"], row["name"])
-    must("networkprobe" in row["purpose"] or row["name"] == "register_owner", row["name"])
+    if row["name"] in OPERATIONS_1_0_0:  # the 1.0.0 rows are untouched
+        must("added 1.18.46" in row["purpose"] and "core.probe_transport 1.0.0" in row["purpose"] and "framework >=1.18.46" in row["purpose"], row["name"])
+        must("networkprobe" in row["purpose"] or row["name"] == "register_owner", row["name"])
+    else:
+        must("added 1.18.47" in row["purpose"] and "core.probe_transport 1.1.0" in row["purpose"] and "framework >=1.18.47" in row["purpose"], row["name"])
+        must("networkprobe" in row["purpose"] and "Additive" in row["purpose"], row["name"])
     function = getattr(pt, row["name"])
     must(inspect.isfunction(function) and row["name"] in row["purpose"].split("(")[0], row["name"])
-    first = inspect.signature(function).parameters
-    must(next(iter(first)) == "module_id", row["name"] + " takes module_id first")
+    first = list(inspect.signature(function).parameters)
+    must(first[0] == "module_id" or (row["name"] == "issue_tunnel_ticket" and first[:2] == ["request", "module_id"]), row["name"] + " takes the verified module_id")
 # the older rows are untouched: the endpoint transport rows are all still there
 must({r["name"] for r in all_rows if r.get("area") == "endpoint-transport"} == {"register_owner", "request", "send_many", "presence"}, "endpoint rows unchanged")
 
@@ -72,7 +90,7 @@ sys.modules["tec_tac.capabilities"] = stub_caps
 pt.register_core_probe_transport_capability()
 must(len(registered) == 1, registered)
 cap = registered[0]
-must(cap["id"] == "core.probe_transport" and cap["module_id"] == "core" and cap["version"] == "1.0.0", cap["id"])
+must(cap["id"] == "core.probe_transport" and cap["module_id"] == "core" and cap["version"] == "1.1.0", cap["id"])
 must(list(cap["operations"]) == OPERATIONS and cap["metadata"] == meta, "operations and metadata")
 for name in OPERATIONS:
     must(callable(getattr(cap["provider"], name)), "the provider has " + name)
@@ -81,14 +99,18 @@ for name in OPERATIONS:
 apps = (APP / "apps.py").read_bytes().decode("utf-8")
 must("register_core_probe_transport_capability()" in apps and "install_probe_route()" in apps, "apps.py wires both")
 tree = ast.parse(apps)
+must("install_tunnel_probe_route()" in apps and "install_tunnel_console_route()" in apps, "apps.py wires both tunnel routes")
 guarded = 0
+names = ("install_probe_route", "register_core_probe_transport_capability", "install_tunnel_probe_route", "install_tunnel_console_route")
 for node in ast.walk(tree):
     if isinstance(node, ast.Try):
         body = ast.dump(ast.Module(body=node.body, type_ignores=[]))
-        if "install_probe_route" in body or "register_core_probe_transport_capability" in body:
+        hits = [n for n in names if f"id='{n}'" in body]
+        if hits:
             guarded += 1
-            must(node.handlers and "install_endpoint_agent_route" not in body, "its own guarded block, apart from the agent route")
-must(guarded == 2, guarded)
+            must(node.handlers and len(hits) == 1 and "install_endpoint_agent_route" not in body, ("its own guarded block, apart from the others", hits))
+must(guarded == 4, guarded)
+must("\r\n" in apps and apps.count("\n") == apps.count("\r\n"), "apps.py keeps CRLF")
 
 # ---------------------------------------------------------------- _record_probe_transport (the function source, run against stubs)
 source = (APP / "audit.py").read_bytes().decode("utf-8")
@@ -124,4 +146,19 @@ pt.record_probe_event("custom:probe-refused", "bad id!", reason="malformed_probe
 must(captured[-1]["probe_id"] is None, "an invalid probe id is written without one")
 audit_stub._record_probe_transport = lambda **kw: (_ for _ in ()).throw(RuntimeError("db down"))
 pt.record_probe_event("custom:probe-connect", H.PROBE)  # never raises
-print("PASS probe transport contract 1.18.46")
+
+# ---------------------------------------------------------------- the 1.0.0 operations behave as they did
+H.reset()
+H.set_owner()
+must(pt.presence("networkprobe", [H.PROBE]) == {"outcome": "ok", "presence": {H.PROBE: {"connected": False, "since": None, "client_id": None, "site_id": None}}}, "presence unchanged")
+must(pt.disconnect("networkprobe", H.PROBE, "nonsense") == {"outcome": "invalid"} and pt.disconnect("networkprobe", H.PROBE, "disabled") == {"outcome": "offline"}, "disconnect unchanged")
+must(pt.send("networkprobe", H.PROBE, {"v": 1, "type": "event", "id": "a", "func": "f", "payload": {}}) == {"outcome": "offline"}, "send unchanged")
+must(pt.request("networkprobe", H.PROBE, {"v": 1, "type": "request", "id": "a", "func": "f", "payload": {}}) == {"outcome": "offline", "reply": None}, "request unchanged")
+must(pt.request("networkprobe", H.PROBE, {"v": 1, "type": "event", "id": "a", "func": "f", "payload": {}}) == {"outcome": "invalid", "reply": None}, "request still wants a request frame")
+H.CALLER["module_id"] = "alerts"
+for result in (pt.presence("alerts", [H.PROBE]), pt.issue_tunnel_ticket(H.engineer_request(), "alerts", H.tunnel_spec()), pt.end_tunnel("alerts", H.new_session_id(), "core"),
+               pt.end_tunnels_for_probe("alerts", H.PROBE, "ended_by_core"), pt.tunnel_status("alerts", [])):
+    must(result["outcome"] == "denied", result)
+H.CALLER["module_id"] = "networkprobe"
+must(pt.POOL_SPECS["handover"] == (2, 64) and pt.MAX_FRAME_BYTES == 16 * 1024 and pt.ROUTE_PATTERN == "ws/tfd/network-probe/" and pt.OWNER_MODULES == ("networkprobe",), "1.0.0 numbers unchanged")
+print("PASS probe transport contract 1.18.47")

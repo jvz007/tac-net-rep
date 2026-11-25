@@ -135,6 +135,18 @@ class ProbeConsumer(AsyncWebsocketConsumer):
 
     # -------------------------------------------------------------------------------------------- connect and disconnect
     async def connect(self):
+        # 1.18.47: a ceiling on connects that are not identified yet (UNAUTHENTICATED_IN_FLIGHT), so a flood spread over many addresses
+        # cannot make real probes queue behind it. Over it: 1013, counted nowhere, before the identity check.
+        if not pt.acquire_unauth():
+            self._ip = pt.client_ip(self.scope)
+            await self._unavailable(pt._transient("busy"), None)
+            return
+        try:
+            await self._connect_inner()
+        finally:
+            pt.release_unauth()
+
+    async def _connect_inner(self):
         scope = self.scope
         self._ip = pt.client_ip(scope)
         # The address ceiling is a NAT-sized pre-auth bound. An address over it is closed 4429 with no audit row.
@@ -237,6 +249,7 @@ class ProbeConsumer(AsyncWebsocketConsumer):
             elif not result.ok:
                 await self.close(pt.CLOSE_UNAUTHORIZED)
                 await self._audit("custom:probe-refused", probe_id=self.probe_id, reason=result.reason, ip=self._ip, refusal=True)
+                await self._end_tunnels("ended_by_core", result.reason)  # 1.18.47: Core ends the tunnels of a probe it refuses at a re-check
                 return False
             else:
                 self._identity_ok_at = now
@@ -253,6 +266,16 @@ class ProbeConsumer(AsyncWebsocketConsumer):
             await self._send_frame({"v": 1, "type": "ping", "id": f"core-{self._ping_count}", "func": "", "payload": {}})
             await self._refresh_presence()
         return True
+
+    async def _end_tunnels(self, reason, detail):
+        """End every live tunnel session of this probe (the audit pool: a database write and group sends, never on the event loop)."""
+        from . import probe_tunnel
+
+        try:
+            await pt.run_in_pool("audit", probe_tunnel.end_for_probe, self.probe_id, reason, "core", detail or "")
+        except Exception:
+            logger.debug("A call failed and was handled (see the caller).", exc_info=True)
+            self._throttled_log("tunnels", "The tunnel sessions of a refused probe could not be ended.")
 
     async def _rejoin_group(self):
         """channels_redis drops a group member after group_expiry. group_add is idempotent, so every ping renews it."""
@@ -280,7 +303,7 @@ class ProbeConsumer(AsyncWebsocketConsumer):
             return
         try:
             frame = json.loads(text_data)
-        except ValueError:
+        except (ValueError, RecursionError):  # 1.18.47: a frame of 15000 '[' is under the size limit and raises RecursionError
             await self._bad_frame("not_json")
             return
         reason = pt.validate_frame(frame)

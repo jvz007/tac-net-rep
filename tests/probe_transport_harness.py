@@ -1,4 +1,4 @@
-"""Shared fixtures of the 1.18.46 probe transport tests (imported by file path, not a test itself).
+"""Shared fixtures of the 1.18.46 and 1.18.47 probe transport tests (imported by file path, not a test itself).
 
 Stubs the boundaries that are not on this PC (channels, Django's cache, Celery, the audit writer, the caller identity, the module registry)
 and loads the REAL framwork/tec_tac/probe_transport.py and probe_transport_consumer.py under a stub ``tec_tac`` package. Nothing here touches
@@ -24,6 +24,8 @@ PROBE2 = "probe-two-0002"
 KEY = "k" * 32
 KEY2 = "j" * 32
 SECRET_MARKERS = (KEY, KEY2, f"Probe {PROBE}.{KEY}")
+ENGINEER = 5
+PERMISSION = "networkprobe.tunnel"
 
 
 def must(condition, message="check failed"):
@@ -158,6 +160,7 @@ class FakeLayer:
     def __init__(self):
         self.groups, self.channels, self.consumers, self.counter = {}, {}, {}, 0
         self.sent = []
+        self.fail = None  # 1.18.47: a function (group, message) -> an exception to raise, or None (ChannelFull, a slow layer)
 
     async def new_channel(self):
         self.counter += 1
@@ -172,6 +175,10 @@ class FakeLayer:
         self.groups.get(group, set()).discard(channel)
 
     async def group_send(self, group, message):
+        if self.fail is not None:
+            problem = self.fail(group, message)
+            if problem is not None:
+                raise problem
         self.sent.append((group, message))
         for channel in sorted(self.groups.get(group, ())):
             consumer = self.consumers.get(channel)
@@ -197,6 +204,7 @@ class FakeBase:
         self.channel_layer = LAYER if LAYER_ENABLED[0] else None
         self.channel_name = None
         self.accepted, self.closed, self.out = False, [], []
+        self.close_reasons, self.out_bytes = [], []
 
     @classmethod
     def as_asgi(cls):
@@ -208,14 +216,23 @@ class FakeBase:
     async def accept(self):
         self.accepted = True
 
-    async def close(self, code=1000):
+    async def close(self, code=1000, reason=None):
         self.closed.append(code)
+        self.close_reasons.append(reason)
 
     async def send(self, text_data=None, bytes_data=None):
-        self.out.append(text_data)
+        if bytes_data is not None:
+            self.out_bytes.append(bytes_data)
+        if text_data is not None:
+            self.out.append(text_data)
+
+
+class ChannelFull(Exception):
+    """channels.exceptions.ChannelFull."""
 
 
 stub("channels")
+stub("channels.exceptions", ChannelFull=ChannelFull)
 stub("channels.generic")
 stub("channels.generic.websocket", AsyncWebsocketConsumer=FakeBase)
 stub("channels.layers", get_channel_layer=lambda: LAYER if LAYER_ENABLED[0] else None)
@@ -225,6 +242,33 @@ stub("django.db", close_old_connections=lambda: DB.__setitem__("old", DB["old"] 
      connections=SimpleNamespace(close_all=lambda: DB.__setitem__("closed", DB["closed"] + 1)))
 stub("django.core.cache", cache=CACHE)
 
+# 1.18.47: the sign-in, the permission and the user model behind a tunnel ticket (stubs; the real ones need Django)
+SIGNIN = {"refusal": None, "calls": []}  # tactical_websocket.session_refusal: None while the sign-in holds
+PERMS = {"granted": True, "calls": []}
+USERS = {}
+
+
+def _session_refusal(value, activity_at=None):
+    SIGNIN["calls"].append((dict(value), activity_at))
+    return SIGNIN["refusal"]
+
+
+def _has_permission(user, codename):
+    PERMS["calls"].append((getattr(user, "pk", None), codename))
+    return PERMS["granted"]
+
+
+class _Users:
+    def filter(self, pk=None, **kw):
+        return SimpleNamespace(first=lambda: USERS.get(pk))
+
+
+stub("tec_tac.tactical_websocket", session_refusal=_session_refusal)
+stub("tec_tac.rbac", has_extension_permission=_has_permission)
+stub("tec_tac.session_security", request_knox_digest=lambda request: getattr(request, "digest", ""))
+stub("django.contrib")
+stub("django.contrib.auth", get_user_model=lambda: SimpleNamespace(objects=_Users()))
+
 # the stub package: real files, lazily imported collaborators are the stubs above
 package = sys.modules.get("tec_tac") or types.ModuleType("tec_tac")
 package.__path__ = [str(APP)]
@@ -233,6 +277,9 @@ WALL = [1_000_000.0]
 pt = importlib.import_module("tec_tac.probe_transport")
 pt.time = SimpleNamespace(time=lambda: WALL[0])
 consumer_module = importlib.import_module("tec_tac.probe_transport_consumer")
+tun = importlib.import_module("tec_tac.probe_tunnel")
+tun.time = SimpleNamespace(time=lambda: WALL[0], sleep=lambda seconds: None)
+tun_consumer = importlib.import_module("tec_tac.probe_tunnel_consumer")
 
 
 def reset():
@@ -260,6 +307,11 @@ def reset():
     REGISTRY["enabled"] = True
     pt.clear_owner_for_tests()
     WALL[0] = 1_000_000.0
+    LAYER.fail = None
+    SIGNIN.update(refusal=None, calls=[])
+    PERMS.update(granted=True, calls=[])
+    USERS.clear()
+    USERS[ENGINEER] = SimpleNamespace(pk=ENGINEER, is_active=True)
 
 
 def set_owner():
@@ -349,3 +401,73 @@ def make_owner_folder(task_inside=True, auth_inside=True, task_is_celery=True, a
     importlib.invalidate_caches()
     REGISTRY["plugins"] = [SimpleNamespace(plugin_id="networkprobe", plugin_type="extension", legacy=False, root=inside)]
     return inside, f"{auth_pkg}.auth.authenticate", f"{task_pkg}.tasks.handle"
+
+
+# ------------------------------------------------------------------------------------------------ 1.18.47: the tunnel
+def engineer_request(user_id=ENGINEER, host="tec.example.com", digest="digest-1", authenticated=True, session=True):
+    user = SimpleNamespace(pk=user_id, is_authenticated=authenticated)
+    return SimpleNamespace(user=user, tec_tac_session=SimpleNamespace(id="trust-1") if session else None, digest=digest, get_host=lambda: host)
+
+
+def new_session_id():
+    import uuid
+
+    return str(uuid.uuid4())
+
+
+def tunnel_spec(**over):
+    spec = {"session_id": new_session_id(), "probe_id": PROBE, "permission": PERMISSION, "target_label": "server-one"}
+    spec.update(over)
+    return spec
+
+
+def probe_online(probe_id=PROBE):
+    pt.set_presence(probe_id, "2026-11-25T08:00:00+00:00", "owner-x", 3, 7)
+
+
+def issue(spec=None, request=None):
+    """Issue a ticket through the provider function of probe_transport (the caller stub says networkprobe)."""
+    spec = spec if spec is not None else tunnel_spec()
+    return pt.issue_tunnel_ticket(request if request is not None else engineer_request(), "networkprobe", spec)
+
+
+def ticket_headers(ticket, real_ip="203.0.113.50", scheme="Ticket", extra=()):
+    rows = [(b"authorization", f"{scheme} {ticket}".encode())]
+    if real_ip:
+        rows.append((b"x-real-ip", real_ip.encode()))
+    rows.extend(extra)
+    return rows
+
+
+def make_console(ticket, clock=None, channel="specific.console", headers=None):
+    c = tun_consumer.ProbeTunnelConsoleConsumer()
+    c.scope = {"headers": headers if headers is not None else ticket_headers(ticket), "client": ("10.0.0.2", 5001)}
+    c.channel_name = channel
+    c._random = lambda: 0.0
+    c._wall = lambda: WALL[0]
+    if clock is not None:
+        c._clock = clock
+    LAYER.consumers[channel] = c
+    return c
+
+
+def make_tunnel_probe(session_id, probe_id=PROBE, key=KEY, clock=None, channel="specific.tprobe", headers=None, real_ip="203.0.113.9"):
+    c = tun_consumer.ProbeTunnelProbeConsumer()
+    rows = headers if headers is not None else headers_for(probe_id, key, real_ip=real_ip, extra=[(b"x-tunnel-session", session_id.encode())])
+    c.scope = {"headers": rows, "client": ("10.0.0.3", 5002)}
+    c.channel_name = channel
+    c._random = lambda: 0.0
+    c._wall = lambda: WALL[0]
+    if clock is not None:
+        c._clock = clock
+    LAYER.consumers[channel] = c
+    return c
+
+
+def frame(ftype, stream=1, payload=b""):
+    return bytes([ftype]) + stream.to_bytes(4, "big") + payload
+
+
+async def settle_all(*consumers):
+    for consumer in consumers:
+        await settle(consumer)

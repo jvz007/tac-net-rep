@@ -259,3 +259,19 @@ class TecTacFrameworkConfig(AppConfig):
             install_probe_route()
         except Exception:
             logger.exception("Tec-Tac network probe socket route installation failed")
+        # 1.18.47: the two tunnel data routes (C2): ws/tfd/network-probe/tunnel/ (the probe) and ws/tfd/probe-tunnel/ (the engineer's Console).
+        # Each in its own guarded block, apart from the control route and the agent route: a fault is logged and start-up goes on, and a
+        # fault in a consumer later closes that socket 4503 and never stops Tactical.
+        try:
+            from .probe_tunnel import install_tunnel_probe_route
+
+            install_tunnel_probe_route()
+        except Exception:
+            logger.exception("Tec-Tac network probe tunnel (probe side) route installation failed")
+
+        try:
+            from .probe_tunnel import install_tunnel_console_route
+
+            install_tunnel_console_route()
+        except Exception:
+            logger.exception("Tec-Tac network probe tunnel (Console side) route installation failed")
