@@ -548,6 +548,9 @@ class ConsoleSessionAuthentication(BaseAuthentication):
         if user is None:
             _end_and_commit(row, "account_inactive")
             raise _failed("session_revoked", "This Engineer Console session has ended. Sign in again.")
+        if cc.account_problem(user):  # 1.18.57: the class refuses an inactive, blocked or installer account itself, whatever permission goes with it
+            _end_and_commit(row, "account_inactive")
+            raise _failed("account_inactive", "This account may not use the Engineer Console.")
         return user, ConsoleAuth(row, trust.knox_digest)
 
     @staticmethod

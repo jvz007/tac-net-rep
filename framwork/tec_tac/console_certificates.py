@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import ipaddress
 import logging
 import os
@@ -65,6 +66,8 @@ _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 
 REVOKE_REASONS = ("lost", "left", "admin", "other")
 ENROL_KEYS = frozenset({"v", "public_key", "pc_label", "proof"})
+ENROL_OPTIONAL_KEYS = frozenset({"code_verifier"})  # 1.18.57: the PKCE verifier of an enrolment code that was asked for with a challenge
+CHALLENGE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")  # base64url of a SHA-256 (the challenge) or a 43 character verifier, no padding
 
 # C4 (1.18.53): the tunnel connect
 CONNECT_PREFIX = b"tectac-console-connect-v1\n"
@@ -413,7 +416,7 @@ def replace_ca(user):
         new.save(force_insert=True)
         revoked = models.TecTacConsoleCertificate.objects.filter(ca=old, state="active").update(
             state="revoked", revoked_at=now, revoked_by=getattr(user, "pk", None), revoked_reason="ca_replaced")
-        cancelled = models.TecTacConsoleEnrolment.objects.filter(state="open").update(state="cancelled", code_hash="", code_expires_at=None)
+        cancelled = models.TecTacConsoleEnrolment.objects.filter(state="open").update(state="cancelled", code_hash="", code_challenge="", code_expires_at=None)
         _audit(user, "custom:console-ca-replaced", "console_ca", new.server_id, "The Engineer Console certificate authority was replaced.",
                {"old_server_id": old.server_id, "new_server_id": new.server_id, "revoked_certificates": revoked, "cancelled_enrolments": cancelled,
                 "not_after": new.not_after.isoformat()})
@@ -652,9 +655,9 @@ def authorise(actor, user_id, ip: str = "") -> dict:
     try:
         with transaction.atomic():
             models.TecTacConsoleEnrolment.objects.filter(user_id=user.pk, state="open", expires_at__lte=now).update(
-                state="expired", code_hash="", code_expires_at=None)
+                state="expired", code_hash="", code_challenge="", code_expires_at=None)
             cancelled = models.TecTacConsoleEnrolment.objects.filter(user_id=user.pk, state="open").update(
-                state="cancelled", code_hash="", code_expires_at=None)
+                state="cancelled", code_hash="", code_challenge="", code_expires_at=None)
             row = models.TecTacConsoleEnrolment.objects.create(user_id=user.pk, authorised_by=getattr(actor, "pk", 0) or 0,
                                                                expires_at=now + timedelta(days=ENROLMENT_DAYS))
             _audit(actor, "custom:console-cert-issue-authorised", "console_certificate", str(row.id),
@@ -676,7 +679,7 @@ def cancel_enrolment(actor, enrolment_id) -> dict:
         raise ConsoleCertError("enrolment_not_found", "No such enrolment.", 404)
     with transaction.atomic():
         changed = models.TecTacConsoleEnrolment.objects.filter(pk=row.pk, state="open", expires_at__gt=now).update(
-            state="cancelled", code_hash="", code_expires_at=None)
+            state="cancelled", code_hash="", code_challenge="", code_expires_at=None)
         if changed != 1:
             raise ConsoleCertError("enrolment_not_open", "This enrolment is no longer open.", 409)
         _audit(actor, "custom:console-cert-enrolment-cancelled", "console_certificate", str(row.id), "An Engineer Console enrolment was cancelled.",
@@ -684,8 +687,12 @@ def cancel_enrolment(actor, enrolment_id) -> dict:
     return {"id": str(row.id), "engineer_id": row.user_id, "state": "cancelled"}
 
 
-def create_enrolment_code(user, host: str | None, ip: str = "") -> dict:
-    """A one-time code for the signed-in engineer's own open enrolment. Only its SHA-256 is stored; a new code voids the old one."""
+def create_enrolment_code(user, host: str | None, ip: str = "", code_challenge: str | None = None) -> dict:
+    """A one-time code for the signed-in engineer's own open enrolment. Only its SHA-256 is stored; a new code voids the old one.
+    1.18.57: an optional PKCE ``code_challenge`` (base64url of SHA-256 of a verifier the Console keeps) is stored with the code hash in the same
+    update, so a code asked for without one clears any earlier challenge. The challenge is never audited and never answered."""
+    if code_challenge is not None and (not isinstance(code_challenge, str) or not CHALLENGE_PATTERN.fullmatch(code_challenge)):
+        raise ConsoleCertError("invalid_request", "code_challenge must be 43 base64url characters.", 400)
     models = _models()
     store = _store()
     store._load_master_key()  # first: a missing or unsafe key is a fault, whatever else is true
@@ -699,11 +706,11 @@ def create_enrolment_code(user, host: str | None, ip: str = "") -> dict:
     code = secrets.token_urlsafe(32)
     code_expires = now + timedelta(minutes=CODE_MINUTES)
     changed = models.TecTacConsoleEnrolment.objects.filter(pk=enrolment.pk, state="open", expires_at__gt=now).update(
-        code_hash=code_hash(code), code_expires_at=code_expires)
+        code_hash=code_hash(code), code_challenge=code_challenge or "", code_expires_at=code_expires)
     if changed != 1:
         raise ConsoleCertError("enrolment_required", "Ask your administrator to issue you a Console certificate.", 409)
     _audit(user, "custom:console-cert-enrol-code", "console_certificate", str(enrolment.id), "An engineer asked for a Console enrolment code.",
-           {"enrolment_id": str(enrolment.id), "engineer_id": user.pk, "code_expires_at": code_expires.isoformat(), "ip": ip}, strict=False)
+           {"enrolment_id": str(enrolment.id), "engineer_id": user.pk, "code_expires_at": code_expires.isoformat(), "pkce": bool(code_challenge), "ip": ip}, strict=False)
     return {"code": code, "code_expires_at": code_expires, "expires_in_seconds": CODE_MINUTES * 60, "host": host, "server_id": ca.server_id,
             "enrolment_id": str(enrolment.id)}
 
@@ -728,8 +735,8 @@ def parse_enrol_request(authorization, raw: bytes, content_length) -> tuple[str,
         body = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         raise ConsoleCertError("invalid_request", "The body must be a JSON object.", 400) from None
-    if not isinstance(body, dict) or set(body) != ENROL_KEYS:
-        raise ConsoleCertError("invalid_request", "The body must hold exactly v, public_key, pc_label and proof.", 400)
+    if not isinstance(body, dict) or not ENROL_KEYS <= set(body) or set(body) - ENROL_KEYS - ENROL_OPTIONAL_KEYS:
+        raise ConsoleCertError("invalid_request", "The body must hold exactly v, public_key, pc_label and proof, and may hold code_verifier.", 400)
     if body["v"] != 1 or isinstance(body["v"], bool):
         raise ConsoleCertError("invalid_request", "Unsupported version.", 400)
     if not all(isinstance(body[key], str) for key in ("public_key", "pc_label", "proof")):
@@ -737,7 +744,10 @@ def parse_enrol_request(authorization, raw: bytes, content_length) -> tuple[str,
     label = normalise_pc_label(body["pc_label"])
     if label is None:
         raise ConsoleCertError("invalid_request", "pc_label must be 1 to 64 plain characters.", 400)
-    return code, {"public_key": body["public_key"], "pc_label": label, "proof": body["proof"]}
+    verifier = body.get("code_verifier")
+    if "code_verifier" in body and (not isinstance(verifier, str) or not CHALLENGE_PATTERN.fullmatch(verifier)):
+        raise ConsoleCertError("invalid_request", "code_verifier must be 43 base64url characters.", 400)
+    return code, {"public_key": body["public_key"], "pc_label": label, "proof": body["proof"], "code_verifier": verifier}
 
 
 def _refuse(ip: str, code: str, message: str, status: int, enrolment=None, *, retry_after: int | None = None, engineer=None):
@@ -778,13 +788,24 @@ def enrol(*, code: str, host: str | None, fields: dict, ip: str) -> dict:
     if candidate is not None:
         taken = models.TecTacConsoleEnrolment.objects.filter(
             pk=candidate.pk, code_hash=digest, state="open", expires_at__gt=now, code_expires_at__gt=now,
-        ).update(code_hash="", code_expires_at=None)
+        ).update(code_hash="", code_challenge="", code_expires_at=None)
     if candidate is None or taken != 1:
         raise _refuse(ip, "code_invalid", "The enrolment code is not valid.", 401)
     enrolment = candidate  # from here the code is burnt; every refusal below carries its own reason
     user = _find_user(enrolment.user_id)
     if account_problem(user):
         raise _refuse(ip, "account_inactive", "This account may not hold a Console certificate.", 403, enrolment, engineer=user)
+    # 1.18.57 PKCE: a challenge bound to the code needs the matching verifier; a verifier with no challenge to match is refused too. Neither
+    # = today's behaviour. The code stays burnt on a mismatch and the 7-day enrolment stays open.
+    verifier = fields.get("code_verifier")
+    challenge = candidate.code_challenge or ""
+    if challenge or verifier is not None:
+        matched = False
+        if challenge and verifier is not None:
+            computed = b64u(hashlib.sha256(verifier.encode("ascii")).digest())
+            matched = hmac.compare_digest(computed.encode("ascii"), challenge.encode("ascii"))
+        if not matched:
+            raise _refuse(ip, "verifier_invalid", "The enrolment code was not asked for by this app. Ask for a new code.", 401, enrolment, engineer=user)
     try:
         check_certificate_limit(user.pk, fields["pc_label"], now)
     except ConsoleCertError as exc:

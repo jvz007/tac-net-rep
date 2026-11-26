@@ -117,12 +117,15 @@ class ConsoleCertificateEnrolmentCodeView(APIView):
         refused = _refuse_api_key(request, "console_certificate")
         if refused is not None:
             return refused
-        body = _checked_body(request, ())
+        body = _checked_body(request, ("code_challenge",))
         if isinstance(body, Response):
             return body
+        challenge = body.get("code_challenge")
+        if "code_challenge" in body and (not isinstance(challenge, str) or not _cc().CHALLENGE_PATTERN.fullmatch(challenge)):
+            return _error("invalid_request", "code_challenge must be 43 base64url characters.", 400)
 
         def run(cc):
-            result = cc.create_enrolment_code(request.user, cc.own_host(request), cc.client_address(request))
+            result = cc.create_enrolment_code(request.user, cc.own_host(request), cc.client_address(request), challenge)
             result["code_expires_at"] = result["code_expires_at"].isoformat()
             return _answer(result)
 

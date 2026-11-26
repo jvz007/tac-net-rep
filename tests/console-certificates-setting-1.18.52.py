@@ -57,6 +57,14 @@ for node in ast.walk(migration):
         name = kwarg(node, "name").value
         created[name] = {e.elts[0].value: e.elts[1] for e in kwarg(node, "fields").elts}
 must(set(created) == set(NEW_MODELS), f"0049 creates the three models: {sorted(created)}")
+# Later migrations may add fields to these models (0051 adds the PKCE challenge in 1.18.57): fold their AddField in, so the check is "0049 plus later".
+for later in ("0051_console_enrolment_pkce.py",):
+    later_tree = ast.parse((APP / "migrations" / later).read_text(encoding="utf-8"))
+    for node in ast.walk(later_tree):
+        if isinstance(node, ast.Call) and call_name(node) == "AddField":
+            target = {m.lower(): m for m in NEW_MODELS}.get(kwarg(node, "model_name").value)
+            if target:
+                created[target][kwarg(node, "name").value] = kwarg(node, "field")
 for name in NEW_MODELS:
     must(set(created[name]) - {"id"} == set(model_fields[name]) - {"id"}, f"{name}: 0049 and models.py agree on the fields")
     for field, call in model_fields[name].items():
@@ -95,6 +103,9 @@ before.models[("tec_tac", "tectacruntimeconfig")].fields.pop("console_certificat
 mig = importlib.import_module("tec_tac.migrations.0049_console_certificates").Migration
 state = before.clone()
 for op in mig.operations:
+    op.state_forwards("tec_tac", state)
+# 1.18.57: 0051 adds the PKCE challenge column to the enrolment; apply it too, so only a real disagreement is left over
+for op in importlib.import_module("tec_tac.migrations.0051_console_enrolment_pkce").Migration.operations:
     op.state_forwards("tec_tac", state)
 changes = MigrationAutodetector(state, current)._detect_changes()
 leftover = {app: [(m.name, [type(o).__name__ + ":" + str(getattr(o, "name", getattr(o, "model_name", ""))) for o in m.operations]) for m in ms] for app, ms in changes.items() if app == "tec_tac"}

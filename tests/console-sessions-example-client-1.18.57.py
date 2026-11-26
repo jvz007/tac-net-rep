@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression: Core 1.18.56 (C1). examples/console-session-client.py, the stand-in Console, works against Core's real routes.
+"""Regression: Core 1.18.56 (C1), extended in 1.18.57 (C2: pkce and enrol --verifier). examples/console-session-client.py, the stand-in Console, works against Core's real routes.
 
 The client's HTTP function is replaced by a call into the real Django views (no network), then every command runs: keygen, enrol, authorise (the
 person's own Knox token), signin (the server proof verifies against the CA key), current, activity, replay (the first send is accepted, the second is
@@ -38,7 +38,7 @@ spec.loader.exec_module(H)
 must = H.must
 h = H.boot()
 if h is None:
-    print("console sessions example client 1.18.56 regression: PASS (source checks only: Django is not installed)")
+    print("console sessions example client 1.18.57 regression: PASS (source checks only: Django is not installed)")
     sys.exit(0)
 
 cspec = importlib.util.spec_from_file_location("console_session_client", CLIENT)
@@ -131,4 +131,25 @@ must(c != 0 and "HTTP 401" in out, f"after sign-out the session is refused: {out
 must(h.models.TecTacConsoleSession.objects.get().revoked_reason == "engineer", "the Core row says engineer")
 for _, _, hdrs in sent:
     must(state["token"] not in json.dumps({k: v for k, v in hdrs.items() if k != "Authorization"}), "the token is only ever in the Authorization header")
-print("console sessions example client 1.18.56 regression: PASS")
+
+# ---- 1.18.57 (C2): `pkce` prints a verifier and its S256 challenge, and `enrol --verifier` sends the verifier
+import hashlib
+
+c, out = run("pkce")
+must(c == 0, f"pkce: {out}")
+fields = dict(line.split(None, 1) for line in out.strip().splitlines())
+pkce_verifier, pkce_challenge = fields["verifier"].strip(), fields["challenge"].strip()
+must(len(pkce_verifier) == 43 and len(pkce_challenge) == 43, "both are 43 characters")
+must(client.b64u(hashlib.sha256(pkce_verifier.encode()).digest()) == pkce_challenge, "the challenge is base64url(SHA-256(verifier)) without padding")
+must(run("pkce")[1] != out, "every run is fresh")
+admin2 = h.new_user("admin2", superuser=True)
+engineer2 = h.new_user("engineer2")
+h.cc.authorise(admin2, engineer2.pk)
+pkce_code = h.cc.create_enrolment_code(engineer2, H.HOST, H.IP, pkce_challenge)["code"]
+state2 = str(tmp / "state2.json")
+c, out = run("enrol", "--server", H.HOST, "--code", pkce_code, "--key", key_file, "--label", "Test PC 2", "--verifier", "A" * 43, "--state", state2)
+must(c != 0 and "verifier_invalid" in out and not Path(state2).exists(), f"a wrong verifier is refused: {out}")
+pkce_code = h.cc.create_enrolment_code(engineer2, H.HOST, H.IP, pkce_challenge)["code"]
+c, out = run("enrol", "--server", H.HOST, "--code", pkce_code, "--key", key_file, "--label", "Test PC 2", "--verifier", pkce_verifier, "--state", state2)
+must(c == 0 and "Enrolled" in out, f"enrol with the right verifier: {out}")
+print("console sessions example client 1.18.57 regression: PASS")

@@ -113,6 +113,8 @@ The Console must verify `server_proof` with the CA public key it was enrolled wi
 
 These accept only `ConsoleSessionAuthentication`: `Authorization: TecTacConsole <token>` and `X-Tectac-Console-Proof` for this request.
 
+Since 1.18.57 the class itself refuses an inactive, blocked or installer account (`401 account_inactive`, and the Console session ends), not only the `ConsoleSessionAuthenticated` permission. A module that pairs the class with another permission class therefore cannot accept a deactivated account's still-valid session. The check runs after the proof, so an unsigned request never ends a session.
+
 - `current/` answers `{engineer: {id, username}, serial, short_serial, pc_label, created_at, last_activity_at, idle_expires_at, absolute_expires_at, console_min_version, heartbeat_seconds}`. It never returns a token, a digest or a key.
 - `activity/` extends the idle limit like the browser's heartbeat and answers `{last_activity_at, idle_expires_at, absolute_expires_at}`. Send it every `heartbeat_seconds` while the engineer works.
 - `sign-out/` revokes the Tec-Tac session (which deletes the Knox token), ends the Console session and the tunnels opened from it, and answers `{"revoked": true}`.

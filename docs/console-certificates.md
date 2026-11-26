@@ -42,9 +42,19 @@ Who can read the key? Anyone who can read the master key file and the database: 
 ## Enrolment, step by step
 
 1. An administrator allows an engineer to enrol (`POST issue/`). The first time ever, Core also creates the CA. The administrator never sees a code. The permission lasts 7 days. Allowing again cancels the earlier one.
-2. The engineer asks for a one-time code (`POST mine/enrolment-code/`). The code lives 10 minutes. Core stores only its SHA-256. A new code voids the old one.
-3. The Console makes a key pair, signs a proof and calls `POST enrol/` with the code.
-4. Core checks the code, the proof and the account, signs the key and answers with the bundle.
+2. The engineer asks for a one-time code (`POST mine/enrolment-code/`). The code lives 10 minutes. Core stores only its SHA-256. A new code voids the old one. Since 1.18.57 the request may carry a PKCE `code_challenge` (see below).
+3. The Console makes a key pair, signs a proof and calls `POST enrol/` with the code (and, when the code was asked for with a challenge, the `code_verifier`).
+4. Core checks the code, the verifier, the proof and the account, signs the key and answers with the bundle.
+
+### Enrolment over loopback with PKCE (since 1.18.57)
+
+The browser can hand a code to the Console through a loopback address on the engineer's PC. To make sure the code reaches the app that asked for it, the Console uses PKCE with S256, the same as sign-in (`docs/console-sessions.md`). The Console builds the loopback redirect itself, so Core needs no port.
+
+- The Console makes a random verifier (43 base64url characters) and sends `code_challenge = base64url(SHA-256(verifier))` without padding (43 characters) in the body of `POST mine/enrolment-code/`: `{"code_challenge": "<43 characters>"}`. The body may stay empty. Any other key is `400 unknown_field`. A challenge of another shape is `400 invalid_request`, and nothing is stored. The answer has the same keys as before.
+- Core stores the challenge with the code's hash. A new code replaces it, so a code asked for without a challenge has none.
+- The Console sends `code_verifier` in the body of `POST enrol/`. If the code was asked for with a challenge and the verifier is missing or does not match, Core answers `401 verifier_invalid`. If a verifier is sent for a code asked for without a challenge, Core answers the same. In both cases the code is burnt and the 7-day enrolment stays open. The engineer presses Enrol again for a new code.
+- No challenge and no verifier works exactly as before, so the command-line client keeps working.
+- The audit row `custom:console-cert-enrol-code` carries `pkce: true|false`. No code, challenge or verifier is ever stored in a row, a log line or an answer.
 
 An engineer may hold at most 3 active certificates. Enrolling again from the same PC (same PC label, any capitals) replaces the older certificate for that PC, which Core revokes with the reason `replaced`. A replacement does not count against the 3. Since 1.18.53 a tunnel that uses the replaced certificate ends at once.
 
@@ -56,11 +66,13 @@ The code works once. Any refusal after Core took the code burns it, but the 7-da
 
 Header: `Authorization: Enrol <code>`. The code is 43 characters from `A-Z a-z 0-9 _ -`.
 
-Body: JSON of at most 4 KiB with exactly these keys, and nothing else:
+Body: JSON of at most 4 KiB with exactly these keys, and nothing else (since 1.18.57 also the optional `code_verifier`):
 
 ```json
 {"v": 1, "public_key": "<base64url>", "pc_label": "Work PC", "proof": "<base64url>"}
 ```
+
+With PKCE, add `"code_verifier": "<43 base64url characters>"`. The proof message does not change.
 
 All binary values are **base64url without padding**.
 
@@ -85,7 +97,7 @@ Answer, 201, `Cache-Control: no-store`:
 
 `ca_public_key`, `ca_cert` and `cert` are base64url DER. The Console pins `server_id` and `ca_public_key` for this host.
 
-Errors. A bad header, an unknown, used, expired or cancelled code all answer the same `401 code_invalid` body, so nobody can tell them apart. After the code was taken the answers are specific: `400 key_invalid`, `400 proof_invalid`, `400 host_unusable`, `403 account_inactive` (inactive, blocked from the dashboard, or an installer account), `409 certificate_limit`, `503 ca_unavailable`, `503 ca_expired`, `503 master_key_unavailable`, `503 audit_failed`. Also `400 invalid_request`, `413 body_too_large`, `403 tls_required`, and `429 rate_limited` with `Retry-After: 60` after 10 failures a minute from one address (an IPv6 address counts by its /64). The answer text never contains the code, the key or the proof.
+Errors. A bad header, an unknown, used, expired or cancelled code all answer the same `401 code_invalid` body, so nobody can tell them apart. After the code was taken the answers are specific: `401 verifier_invalid` (since 1.18.57: the code was asked for with a challenge and the verifier is missing or wrong, or a verifier came with a code that had no challenge), `400 key_invalid`, `400 proof_invalid`, `400 host_unusable`, `403 account_inactive` (inactive, blocked from the dashboard, or an installer account), `409 certificate_limit`, `503 ca_unavailable`, `503 ca_expired`, `503 master_key_unavailable`, `503 audit_failed`. Also `400 invalid_request`, `413 body_too_large`, `403 tls_required`, and `429 rate_limited` with `Retry-After: 60` after 10 failures a minute from one address (an IPv6 address counts by its /64). The answer text never contains the code, the key or the proof.
 
 ## The tunnel connect, exactly (for the Console developer)
 

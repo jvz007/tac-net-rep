@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A stand-in Engineer Console for Core 1.18.56: enrol, sign in, call current/ and activity/, sign out, and replay a request to see it refused.
+"""A stand-in Engineer Console for Core 1.18.57: enrol, sign in, call current/ and activity/, sign out, and replay a request to see it refused.
 
 It exists so the dev02 checklist can be run before the real Console app is built. It is a test tool, not a product: it keeps the session token in a
 state file (protect it like a password), and `--insecure` skips the TLS certificate check for a lab server.
@@ -10,6 +10,7 @@ Typical run (every command takes --state, the JSON file that holds what the prev
 
   python console-session-client.py keygen   --key console.pem
   python console-session-client.py enrol    --server tec.example.com --code <enrolment code from My Account> --key console.pem --label "Test PC" --state state.json
+  python console-session-client.py pkce     (1.18.57: prints a verifier and its challenge; ask for the code with the challenge, then `enrol --verifier`)
   python console-session-client.py authorise --state state.json --knox "Token <value of the Authorization header of any Tec-Tac request in the browser>"
   python console-session-client.py signin   --state state.json
   python console-session-client.py current  --state state.json
@@ -120,7 +121,10 @@ def cmd_enrol(args):
     public = public_key_b64u(key)
     spki_hash = sha_hex(b64u_decode(public))
     message = f"tectac-console-enrol-v1\nhost={args.server}\ncode={sha_hex(args.code)}\nkey={spki_hash}".encode()
-    body = json.dumps({"v": 1, "public_key": public, "pc_label": args.label, "proof": sign(key, message)}).encode()
+    fields = {"v": 1, "public_key": public, "pc_label": args.label, "proof": sign(key, message)}
+    if args.verifier:  # 1.18.57: the PKCE verifier of a code that was asked for with a challenge
+        fields["code_verifier"] = args.verifier
+    body = json.dumps(fields).encode()
     status, data, _ = call(args, args.server, "POST", "/api/tfd/console-certificates/enrol/", body,
                            {"Authorization": f"Enrol {args.code}", "Content-Type": "application/json"})
     show("enrol", status, data)
@@ -130,6 +134,14 @@ def cmd_enrol(args):
              "cert": data["cert"], "serial": data["serial"], "pc_label": args.label}
     save_state(args.state, state)
     print("Enrolled. Serial", data["serial"], "- state saved to", args.state)
+
+
+def cmd_pkce(args):
+    """Print a fresh PKCE verifier and its S256 challenge (base64url of SHA-256, no padding). Ask for the enrolment code with the challenge
+    (POST mine/enrolment-code/ {"code_challenge": ...}) and give the verifier to `enrol --verifier`. Keep the verifier private."""
+    verifier = b64u(os.urandom(32))
+    print("verifier ", verifier)
+    print("challenge", b64u(hashlib.sha256(verifier.encode()).digest()))
 
 
 def cmd_authorise(args):
@@ -238,7 +250,8 @@ def main():
 
     state_flag = ("--state", {"required": True, "help": "the JSON state file"})
     add("keygen", cmd_keygen, ("--key", {"required": True}))
-    add("enrol", cmd_enrol, ("--server", {"required": True}), ("--code", {"required": True}), ("--key", {"required": True}), ("--label", {"default": "Test PC"}), state_flag)
+    add("enrol", cmd_enrol, ("--server", {"required": True}), ("--code", {"required": True}), ("--key", {"required": True}), ("--label", {"default": "Test PC"}), ("--verifier", {"help": "the PKCE verifier, when the code was asked for with a challenge (1.18.57)"}), state_flag)
+    add("pkce", cmd_pkce)
     add("authorise", cmd_authorise, state_flag, ("--knox", {"required": True, "help": 'the Authorization header value of a signed-in browser, for example "Token abc..."'}),
         ("--port", {"type": int, "default": 40123}))
     add("signin", cmd_signin, state_flag, ("--code", {}), ("--verifier", {}))

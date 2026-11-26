@@ -974,6 +974,7 @@ class TecTacConsoleEnrolment(models.Model):
     expires_at = models.DateTimeField()
     state = models.CharField(max_length=9, choices=State.choices, default=State.OPEN)
     code_hash = models.CharField(max_length=64, blank=True, default="")
+    code_challenge = models.CharField(max_length=43, blank=True, default="")  # 1.18.57: PKCE S256 challenge bound to the current code
     code_expires_at = models.DateTimeField(null=True, blank=True)
     used_serial = models.CharField(max_length=32, blank=True, default="")
 
