@@ -154,3 +154,26 @@ How many days a new Engineer Console certificate lasts. It never changes a certi
 - Each change writes its own strict audit row (`modify`, object `console_certificate_validity_days`, before and after). A value sent unchanged writes no row.
 - Python: `tec_tac.runtime_settings.get_console_certificate_validity_days()` never raises. A read error, or a stored value outside 1 to 730, reads as 365. Core reads it when it makes a certificate.
 - Tests: `tests/console-certificates-setting-1.18.52.py`.
+
+## Engineer Console web address (1.18.58)
+
+```text
+console_ui_url   default ''   at most 300 characters
+```
+
+The Tec-Tac web page the Engineer Console opens for its sign-in. Empty means unset, and Core then uses the single https origin in Tactical's CORS settings. See `docs/console-sessions.md` (`sign-in-info/`).
+
+`GET /api/tfd/system/runtime-settings/` gains an object, additive:
+
+```json
+"console_ui_url": { "value": "https://rmm.example.com/tec-tac/", "maximum_length": 300, "default": "" }
+```
+
+`PATCH` accepts `{"console_ui_url": "https://rmm.example.com"}`:
+
+- Text, https only, with a host (and a port if needed). No user name, query or fragment. The path must be empty, `/`, `/tec-tac` or `/tec-tac/`. Core stores and answers the origin plus `/tec-tac/`. A bool, number, list, `http://`, `ftp://` or any other path is a 400.
+- JSON `null` or empty text resets it to unset.
+- Superuser only. A caller who holds only `core.runtime_settings.manage` gets 403, checked before the value is read, with one best-effort Core deny row (object `console_ui_url`, no value). A body that mixes this setting with another is refused whole for such a caller, so nothing is saved.
+- Each change writes its own strict audit row (`modify`, object `console_ui_url`, before and after). A failed audit write rolls the change back.
+- A stored value that does not validate (database tampering) reads as unset in the answer and is "unavailable" to the Console: there is no fall-back to the CORS origin.
+- Tests: `tests/console-ui-url-setting-1.18.58.py`.

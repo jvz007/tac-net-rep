@@ -53,7 +53,7 @@ for key in ("max_length", "null", "blank", "unique", "default"):
 must(ast.unparse(kwarg(field, "max_length")) == "43" and ast.unparse(kwarg(field, "default")) == "''" and ast.unparse(kwarg(field, "blank")) == "True", "43 characters, blank, empty default")
 must(kwarg(field, "null") is None, "not nullable")
 must('("tec_tac", "0050_console_sessions")' in migration_source and migration_source.count("dependencies = [") == 1, "0051 depends on 0050 only")
-must(len(list((APP / "migrations").glob("0051_*.py"))) == 1 and not list((APP / "migrations").glob("0052_*.py")), "0051 is the only new migration")
+must(len(list((APP / "migrations").glob("0051_*.py"))) == 1 and len(list((APP / "migrations").glob("0052_*.py"))) == 1 and not list((APP / "migrations").glob("0053_*.py")), "0051 is the migration of this release (0052 is 1.18.58's)")
 must(b"\r" not in migration_path.read_bytes(), "LF like 0050")
 
 cc_source = (APP / "console_certificates.py").read_text(encoding="utf-8")
@@ -94,9 +94,12 @@ from django.db.migrations.state import ProjectState  # noqa: E402
 current = ProjectState.from_apps(apps)
 before = current.clone()
 before.models[("tec_tac", "tectacconsoleenrolment")].fields.pop("code_challenge")
+before.models[("tec_tac", "tectacruntimeconfig")].fields.pop("console_ui_url")  # 1.18.58: 0052 adds it
 mig = importlib.import_module("tec_tac.migrations.0051_console_enrolment_pkce").Migration
 state = before.clone()
 for op in mig.operations:
+    op.state_forwards("tec_tac", state)
+for op in importlib.import_module("tec_tac.migrations.0052_console_ui_url").Migration.operations:
     op.state_forwards("tec_tac", state)
 changes = MigrationAutodetector(state, current)._detect_changes()
 must(not {app: ms for app, ms in changes.items() if app == "tec_tac"}, "0051 and the models agree (makemigrations would write nothing)")
@@ -145,7 +148,7 @@ def refusals():
     return rows_of(h, "custom:console-cert-enrol-refused")
 
 
-# a code with a challenge and the right verifier enrols, with the same bundle keys as before
+# a code with a challenge and the right verifier enrols, with the same bundle keys as before (1.18.58 adds ui_url, additive)
 user = engineer()
 verifier, challenge = pkce()
 r = ask(user, challenge)
@@ -154,7 +157,7 @@ code = r.data["code"]
 must(row_of(user).code_challenge == challenge, "the challenge is stored with the code")
 must(challenge not in json.dumps(r.data, default=str) and verifier not in json.dumps(r.data, default=str), "neither challenge nor verifier is in the answer")
 ok = enrol_with(code, verifier)
-must(ok.status_code == 201 and set(ok.data) == {"v", "host", "server_id", "ca_public_key", "ca_cert", "cert", "serial", "not_after", "engineer"}, f"enrols: {ok.status_code} {ok.data}")
+must(ok.status_code == 201 and set(ok.data) == {"v", "host", "server_id", "ca_public_key", "ca_cert", "cert", "serial", "not_after", "engineer", "ui_url"}, f"enrols: {ok.status_code} {ok.data}")
 must(row_of(user).state == "used" and row_of(user).code_challenge == "", "used, and the challenge is cleared")
 code_rows = rows_of(h, "custom:console-cert-enrol-code")
 must(code_rows and code_rows[-1]["metadata"]["pkce"] is True and code_rows[-1]["strict"] is False, "the code row says pkce: true and is not strict")

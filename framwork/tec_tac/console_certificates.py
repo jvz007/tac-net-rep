@@ -52,6 +52,8 @@ DEFAULT_PAGE_SIZE = 50
 MAX_ENROLMENTS_LISTED = 200
 FAILURES_PER_ADDRESS_PER_MINUTE = 10  # the number AD-54 signed for the agent route; the same here (IPv6 grouped by its /64)
 FAILURE_PREFIX = "tec-tac:cc:fail:"
+SIGN_IN_INFO_PREFIX = "tec-tac:cc:uiurl:"  # 1.18.58: the sign-in-info route's own per-address counter (it counts every request, not failures)
+SIGN_IN_INFO_PER_MINUTE = 30
 REFUSAL_ROW_PREFIX = "tec-tac:cc:refrow:"
 PROOF_PREFIX = b"tectac-console-enrol-v1\n"
 SCOPE_NAME = "core:console-ca"
@@ -236,6 +238,48 @@ def forwarded_plaintext(request) -> bool:
     if not isinstance(value, str) or not value:
         return False
     return value.split(",")[0].strip().lower() in ("http", "ws")
+
+
+# ------------------------------------------------------------------------------------------------ the Tec-Tac web address (1.18.58)
+def console_ui_url() -> str | None:
+    """The https address of the Tec-Tac web page the Engineer Console opens for its sign-in, or None when none can be named. Never raises.
+
+    Order: the runtime setting ``console_ui_url`` when an administrator set it (a stored value that does not validate is None, never a silent
+    fall-back to the next source); otherwise the single https origin in Tactical's CORS settings (``tactical_websocket.configured_frontend_origins``:
+    server settings only, regular expressions and allow-all ignored) plus ``/tec-tac/``. None or several https origins give None. It is never
+    read from the request's Origin, Referer, Host or query string."""
+    try:
+        from .runtime_settings import read_console_ui_url_setting, validate_console_ui_url
+
+        stored = read_console_ui_url_setting()
+        if stored:
+            return validate_console_ui_url(stored) or None
+        from .runtime_settings import CONSOLE_UI_URL_PATH
+        from .tactical_websocket import configured_frontend_origins
+
+        secure = sorted(origin for origin in configured_frontend_origins() if origin.startswith("https://"))
+        return secure[0] + CONSOLE_UI_URL_PATH if len(secure) == 1 else None
+    except Exception:
+        logger.warning("The Tec-Tac web address for the Console could not be worked out.", exc_info=True)
+        return None
+
+
+def sign_in_info_limited(ip: str) -> bool:
+    """Count one request to the sign-in-info route and say whether this address (an IPv6 address by its /64) is past 30 in the minute. The
+    answer holds no user data, so a cache fault reads as not limited and is logged."""
+    try:
+        cache = _cache()
+        key = f"{SIGN_IN_INFO_PREFIX}{_address_key(ip)}:{_minute()}"
+        cache.add(key, 0, timeout=120)
+        try:
+            count = int(cache.incr(key))
+        except ValueError:
+            cache.add(key, 1, timeout=120)
+            count = 1
+        return count > SIGN_IN_INFO_PER_MINUTE
+    except Exception:
+        logger.warning("The sign-in-info request counter could not be used.", exc_info=True)
+        return False
 
 
 # ------------------------------------------------------------------------------------------------ failure limit (address only)
@@ -845,6 +889,7 @@ def enrol(*, code: str, host: str | None, fields: dict, ip: str) -> dict:
         "v": 1, "host": host, "server_id": ca.server_id, "ca_public_key": b64u(bytes(ca.public_key_der)), "ca_cert": b64u(bytes(ca.cert_der)),
         "cert": b64u(cert_der), "serial": row.serial, "not_after": row.not_after.isoformat(),
         "engineer": {"id": user.pk, "username": user.get_username()},
+        "ui_url": console_ui_url(),  # 1.18.58: the Tec-Tac web page for the Console's sign-in, or None; never makes the enrolment fail
     }
 
 

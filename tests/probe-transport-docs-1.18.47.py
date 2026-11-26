@@ -88,7 +88,7 @@ must("RecursionError" in fleet, "the nested-frame note")
 
 # ---------------------------------------------------------------- capabilities.md
 section = caps[caps.index("## Core probe transport"):caps.index("## Core agent downloads")]
-must("`core.probe_transport` 1.3.0" in section and ">=1.18.53" in section and "`console_certificate_required`" in section and ">=1.18.50" in section and "docs/probe-transport.md" in section and ">=1.18.47" in section and ">=1.18.46" in section, "the capabilities section")
+must("`core.probe_transport` 1.4.0" in section and "1.3.0 (framework >=1.18.53" in section and ">=1.18.53" in section and "`console_certificate_required`" in section and ">=1.18.50" in section and "docs/probe-transport.md" in section and ">=1.18.47" in section and ">=1.18.46" in section, "the capabilities section")
 for operation in meta["operations"]:
     must(f"`{operation}`" in section, "the capabilities section names " + operation)
 must("/ws/tfd/probe-tunnel/" in section and "/ws/tfd/network-probe/tunnel/" in section, "the capabilities section names the routes")

@@ -3,7 +3,7 @@
 
 Source checks (always): contracts.py (read as source) has a row for each of the three public names and one HTTP detail per route with its
 authorization, request, response, errors, audit and notes, plus the rule 'Engineer Console sessions (core.console_session 1.0.0 ...'; the ticket row says
-the Console-session rule and core.probe_transport stays 1.3.0; apps.py registers the capability in its own try block; docs/capabilities.md lists it; the
+the Console-session rule and core.probe_transport is unchanged by it (1.3.0 in 1.18.56; 1.4.0 since 1.18.58's permission list); apps.py registers the capability in its own try block; docs/capabilities.md lists it; the
 openapi grouping names the route and the views module. Runtime (where Django is importable): the capability is registered with the id, the version and the
 one operation; console_info returns the three fields for a Console-authenticated request and None for a browser, an API key and an anonymous request,
 never raises and returns no token, digest or key; the metadata holds no secret.
@@ -62,7 +62,7 @@ for route in ("/api/tfd/console-sessions/authorise/", "/api/tfd/console-sessions
     must("audit" in http[route]["POST"], f"{route} names its audit rows")
 rule = next(r for r in rules if r.startswith("Engineer Console sessions (core.console_session 1.0.0"))
 for needle in ("ConsoleSessionAuthentication", "ConsoleSessionAuthenticated", "has_capability('core.console_session')", "framework >=1.18.56", "console_info(request)", "never sees a token",
-               "refused on every other route", "core.probe_transport is unchanged at 1.3.0", "docs/console-sessions.md"):
+               "refused on every other route", "core.probe_transport was not changed by it", "docs/console-sessions.md"):
     must(needle in rule, f"the rule lacks {needle!r}")
 ticket = index[("tec_tac.probe_transport", "issue_tunnel_ticket")]["purpose"]
 must("Since Core 1.18.56" in ticket and "certificate_engineer_mismatch" in ticket and "browser-asked ticket is unchanged" in ticket and "core.probe_transport 1.3.0" in ticket, "the ticket row names the Console-session rule")
@@ -76,7 +76,7 @@ must("`core.console_session` 1.0.0" in caps and "console_info(request)" in caps 
 openapi = (APP / "openapi.py").read_text(encoding="utf-8")
 must('"tec_tac.console_session_views": "Tec-Tac · Console Sessions"' in openapi and '("/api/tfd/console-sessions/", "Tec-Tac · Console Sessions")' in openapi, "the openapi grouping")
 urls = (APP / "urls.py").read_text(encoding="utf-8")
-must(urls.count('path("console-sessions/') == 5, "five routes in urls.py")
+must(urls.count('path("console-sessions/') == 6, "six routes in urls.py (1.18.58 added sign-in-info/)")
 rel = (ROOT / "docs" / "releases")
 must(rel.is_dir(), "docs/releases exists")
 

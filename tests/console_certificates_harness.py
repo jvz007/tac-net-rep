@@ -112,6 +112,13 @@ def boot():
         return None
     import threading
 
+    try:  # tec_tac.module_state imports fcntl, which Windows lacks (1.18.58: a stand-in so the Django-dependent tests can run on the development PC)
+        import fcntl  # noqa: F401
+    except ImportError:
+        _fcntl = types.ModuleType("fcntl")
+        _fcntl.__dict__.update(LOCK_EX=2, LOCK_SH=1, LOCK_UN=8, LOCK_NB=4, flock=lambda *a: None)
+        sys.modules["fcntl"] = _fcntl
+
     from django.apps import AppConfig
     from django.conf import settings
 

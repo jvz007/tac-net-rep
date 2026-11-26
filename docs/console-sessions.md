@@ -25,6 +25,7 @@ A Console session is a normal Tec-Tac session. Idle time, the absolute limit, th
 | `authorise/` | 10 a minute and 100 a day per person |
 | `token/` | 10 failures a minute per address (IPv6 by its /64), its own counter |
 | `activity/` | 30 a minute per person |
+| `sign-in-info/` | 30 requests a minute per address (IPv6 by its /64), its own counter; every request counts |
 | Body of `token/` | at most 4 KiB |
 | Body of a Console request | at most 64 KiB |
 | Minimum Console version | `console_min_version`, 0.1.1 |
@@ -108,6 +109,27 @@ The Console must verify `server_proof` with the CA public key it was enrolled wi
 | 426 | `console_update_required` |
 | 429 | `rate_limited` |
 | 503 | `master_key_unavailable`, `audit_failed` |
+
+### `GET sign-in-info/` (the Console, no sign-in)
+
+Since Core 1.18.58. It tells the Console which Tec-Tac web page to open for the browser step. No sign-in, no cookie, and nothing about any person: the answer is the same for everyone.
+
+`GET /api/tfd/console-sessions/sign-in-info/` answers `200 {"ui_url": "https://rmm.example.com/tec-tac/"}`. The address is https and always ends `/tec-tac/`. The Console checks that it is https, opens `<ui_url>#/console/sign-in`, and never guesses an address from the host it enrolled with.
+
+Where Core gets the address, in this order:
+
+1. The runtime setting `console_ui_url` (`PATCH /api/tfd/system/runtime-settings/`, superuser only; `docs/runtime-settings.md`), when an administrator set it. A stored value that does not validate is "unavailable", never a silent fall-back to the next source.
+2. Otherwise the single https origin in Tactical's CORS settings (`CORS_ORIGIN_WHITELIST` and `CORS_ALLOWED_ORIGINS`), plus `/tec-tac/`. Origins that are not https, regular expressions and allow-all settings are ignored. None or several https origins give "unavailable".
+
+Core never reads the address from the request's `Origin`, `Referer`, `Host` or query string. It writes no audit row.
+
+| Status | `code` |
+|---|---|
+| 403 | `tls_required` (the proxy reports plain text) |
+| 429 | `rate_limited` (31st request in a minute from one address; `Retry-After: 60`) |
+| 503 | `ui_url_unavailable`: Core cannot name its Tec-Tac web address. Ask your administrator to set `console_ui_url` |
+
+Every answer carries `Cache-Control: no-store`. The same address is the `ui_url` key of the enrolment answer (`docs/console-certificates.md`).
 
 ### `GET current/`, `POST activity/`, `POST sign-out/` (the Console)
 
@@ -278,6 +300,6 @@ class ConsoleRoute(APIView):
 
 The request then carries `request.user` (the engineer), `request.tec_tac_session` and `request.auth` (a `ConsoleAuth` with `digest`, `serial`, `short_serial` and `pc_label`). The module checks its own permission as for any request. `tec_tac.console_sessions.console_info(request)` returns `{serial, short_serial, pc_label}` for such a request and `None` for anything else.
 
-A module never sees a token, a code, a certificate or a key. It never mints or stores a Console credential and never writes a Console session row. A tunnel ticket asked for from a Console session (`issue_tunnel_ticket`) is tied to that session's certificate: the tunnel connect must use that serial, or it is refused with `certificate_engineer_mismatch`. `core.probe_transport` stays at 1.3.0.
+A module never sees a token, a code, a certificate or a key. It never mints or stores a Console credential and never writes a Console session row. A tunnel ticket asked for from a Console session (`issue_tunnel_ticket`) is tied to that session's certificate: the tunnel connect must use that serial, or it is refused with `certificate_engineer_mismatch`. `core.probe_transport` was not changed by Console sessions (1.3.0 in 1.18.56; 1.18.58 made it 1.4.0 for the permission list).
 
 The Console token is refused on every other route. See also `docs/console-certificates.md` (enrolment and the certificate) and `docs/probe-transport.md` (the tunnel).

@@ -140,6 +140,28 @@ class ConsoleSessionTokenView(_NoStoreView):
         return _guarded(run)
 
 
+@extend_schema_view(get=extend_schema(tags=[TAG], summary="The Tec-Tac web address the Engineer Console opens for its sign-in (no sign-in; holds no user data)"))
+class ConsoleSessionSignInInfoView(_NoStoreView):
+    """Read-only, no sign-in (1.18.58): ``{ui_url}`` from the runtime setting or the single https CORS origin, never from the request. https only,
+    30 requests a minute per address, no audit row, nothing about any user."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = []
+    http_method_names = ["get", "options"]
+
+    def get(self, request):
+        cc = _cc()
+        if cc.forwarded_plaintext(request):
+            return _error("tls_required", "Use https.", 403)
+        if cc.sign_in_info_limited(cc.client_address(request)):
+            return _error("rate_limited", "Too many requests. Wait a minute and try again.", 429, 60)
+        ui_url = cc.console_ui_url()
+        if not ui_url:
+            return _error("ui_url_unavailable", "This server cannot name its Tec-Tac web address yet. Ask your administrator to set it in the runtime settings.", 503)
+        return _answer({"ui_url": ui_url})
+
+
 class _ConsoleOnlyView(_NoStoreView):
     """A route only the Console may call: ConsoleSessionAuthentication and nothing else."""
 

@@ -92,10 +92,12 @@ Answer, 201, `Cache-Control: no-store`:
 
 ```json
 {"v": 1, "host": "...", "server_id": "...", "ca_public_key": "...", "ca_cert": "...", "cert": "...", "serial": "...", "not_after": "...",
- "engineer": {"id": 5, "username": "..."}}
+ "engineer": {"id": 5, "username": "..."}, "ui_url": "https://rmm.example.com/tec-tac/"}
 ```
 
 `ca_public_key`, `ca_cert` and `cert` are base64url DER. The Console pins `server_id` and `ca_public_key` for this host.
+
+`ui_url` (since 1.18.58, additive) is the https address of the Tec-Tac web page, always ending `/tec-tac/`. The Console opens `<ui_url>#/console/sign-in` for its sign-in. It is `null` when Core cannot name one; enrolment never fails because of it. Core takes it from the runtime setting `console_ui_url` when an administrator set it, otherwise from the single https origin in Tactical's CORS settings, and never from the request's `Origin`, `Referer` or `Host`. A Console that enrolled earlier asks `GET /api/tfd/console-sessions/sign-in-info/` (`docs/console-sessions.md`). Every earlier key is unchanged.
 
 Errors. A bad header, an unknown, used, expired or cancelled code all answer the same `401 code_invalid` body, so nobody can tell them apart. After the code was taken the answers are specific: `401 verifier_invalid` (since 1.18.57: the code was asked for with a challenge and the verifier is missing or wrong, or a verifier came with a code that had no challenge), `400 key_invalid`, `400 proof_invalid`, `400 host_unusable`, `403 account_inactive` (inactive, blocked from the dashboard, or an installer account), `409 certificate_limit`, `503 ca_unavailable`, `503 ca_expired`, `503 master_key_unavailable`, `503 audit_failed`. Also `400 invalid_request`, `413 body_too_large`, `403 tls_required`, and `429 rate_limited` with `Retry-After: 60` after 10 failures a minute from one address (an IPv6 address counts by its /64). The answer text never contains the code, the key or the proof.
 

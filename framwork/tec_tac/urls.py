@@ -8,7 +8,8 @@ from .console_certificate_views import (
     ConsoleCertificateEnrolView, ConsoleCertificateIssueView, ConsoleCertificateListView, ConsoleCertificateMineView, ConsoleCertificateRevokeView,
 )
 from .console_session_views import (
-    ConsoleSessionActivityView, ConsoleSessionAuthoriseView, ConsoleSessionCurrentView, ConsoleSessionSignOutView, ConsoleSessionTokenView,
+    ConsoleSessionActivityView, ConsoleSessionAuthoriseView, ConsoleSessionCurrentView, ConsoleSessionSignInInfoView, ConsoleSessionSignOutView,
+    ConsoleSessionTokenView,
 )
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
@@ -123,6 +124,7 @@ urlpatterns = [
     path("console-certificates/<str:serial>/revoke/", ConsoleCertificateRevokeView.as_view(), name="tec-tac-console-certificates-revoke"),
     path("console-sessions/authorise/", ConsoleSessionAuthoriseView.as_view(), name="tec-tac-console-sessions-authorise"),
     path("console-sessions/token/", ConsoleSessionTokenView.as_view(), name="tec-tac-console-sessions-token"),
+    path("console-sessions/sign-in-info/", ConsoleSessionSignInInfoView.as_view(), name="tec-tac-console-sessions-sign-in-info"),
     path("console-sessions/current/", ConsoleSessionCurrentView.as_view(), name="tec-tac-console-sessions-current"),
     path("console-sessions/activity/", ConsoleSessionActivityView.as_view(), name="tec-tac-console-sessions-activity"),
     path("console-sessions/sign-out/", ConsoleSessionSignOutView.as_view(), name="tec-tac-console-sessions-sign-out"),

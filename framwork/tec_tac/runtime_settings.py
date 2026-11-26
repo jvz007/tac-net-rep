@@ -29,6 +29,12 @@ enforce with one constant. See ``module_licensing``.
 days (1 to 730, default 365). Only an effective superuser changes it (checked before the value; a refusal writes a deny row; a body that
 mixes it with another setting is refused whole). JSON null is refused, not a reset. It is read when a certificate is made, so it
 changes new certificates only. See ``docs/console-certificates.md``.
+
+1.18.58: ``console_ui_url`` is the Tec-Tac web address the Engineer Console opens for its sign-in. Text: https only, a host, no user info, no
+query or fragment, and a path of nothing, ``/``, ``/tec-tac`` or ``/tec-tac/``. It is always stored as the origin plus ``/tec-tac/`` (at most
+300 characters). JSON null or empty text resets it to unset, and then Core reads the single https origin of Tactical's CORS settings. Only an
+effective superuser changes it (checked before the value; a refusal writes a deny row; a body that mixes it with another setting is refused
+whole). See ``docs/console-sessions.md``.
 """
 from __future__ import annotations
 
@@ -67,12 +73,18 @@ SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS = "console_certificate_validity_days"
 DEFAULT_CONSOLE_CERTIFICATE_VALIDITY_DAYS = 365
 MIN_CONSOLE_CERTIFICATE_VALIDITY_DAYS = 1
 MAX_CONSOLE_CERTIFICATE_VALIDITY_DAYS = 730
+SETTING_CONSOLE_UI_URL = "console_ui_url"
+MAX_CONSOLE_UI_URL_LENGTH = 300
+CONSOLE_UI_URL_PATH = "/tec-tac/"
+_CONSOLE_UI_URL_PATHS = ("", "/", "/tec-tac", "/tec-tac/")
+_CONSOLE_UI_URL_HOST = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")  # a host name or an IPv4 address (the same shape as Core's own host rule)
+_CONSOLE_UI_URL_IPV6 = re.compile(r"[0-9a-f:.]{2,45}")
 RUNTIME_SETTING_NAMES = (
     SETTING_MODULE_REGISTER_TIMEOUT, SETTING_TACTICAL_UPLOAD_MAX_MIB, SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE,
-    SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
+    SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS, SETTING_CONSOLE_UI_URL,
 )
 # The settings whose stored value is text, not a whole number (1.17.58): the change check must not read them as an int.
-_TEXT_SETTINGS = (SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE)
+_TEXT_SETTINGS = (SETTING_SYSTEM_NAME, SETTING_LICENSING_MODE, SETTING_CONSOLE_UI_URL)
 RETIRED_PRIVATE_RELAY_AUDIT_OBJECT = "priority_mail_private_relay"
 RETIRED_PRIVATE_RELAY_MESSAGE = "Tec-Tac runtime setting retired: the private mail relay was removed. Email uses Tactical's SMTP only."
 
@@ -98,6 +110,9 @@ LICENSING_MODE_DENIED = "Only a Tec-Tac superuser may change the licensing enfor
 
 # The Console certificate validity: superusers only (1.18.52).
 CONSOLE_VALIDITY_DENIED = "Only a Tec-Tac superuser may change how long a Console certificate lasts."
+
+# The Tec-Tac web address of the Engineer Console sign-in: superusers only (1.18.58).
+CONSOLE_UI_URL_DENIED = "Only a Tec-Tac superuser may change the Tec-Tac web address the Engineer Console opens."
 
 
 class RuntimeSettingsError(ValueError):
@@ -171,6 +186,47 @@ def validate_console_certificate_validity_days(value) -> int:
     return value
 
 
+def validate_console_ui_url(value) -> str:
+    """Accept only text that names the Tec-Tac page over https: a host (and a port), no user info, no query or fragment, and a path of
+    nothing, ``/``, ``/tec-tac`` or ``/tec-tac/``. Returns the origin plus ``/tec-tac/``. Blank text gives ``''`` (unset); the caller maps JSON
+    null to the same. A bool, number, list and any other type are refused. At most 300 characters in and out."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(value, str):
+        raise RuntimeSettingsError(f"{SETTING_CONSOLE_UI_URL} must be text.")
+    if len(value) > MAX_CONSOLE_UI_URL_LENGTH:
+        raise RuntimeSettingsError(f"{SETTING_CONSOLE_UI_URL} must be at most {MAX_CONSOLE_UI_URL_LENGTH} characters.")
+    text = value.strip()
+    if not text:
+        return ""
+    problem = f"{SETTING_CONSOLE_UI_URL} must be an https address such as https://rmm.example.com/tec-tac/ (no user name, query or fragment)."
+    if "?" in text or "#" in text or "\\" in text or "@" in text or not all(ch.isascii() and ch.isprintable() and not ch.isspace() for ch in text):
+        raise RuntimeSettingsError(problem)
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        raise RuntimeSettingsError(problem) from None
+    host = (parts.hostname or "").lower()
+    if parts.scheme.lower() != "https" or not host or parts.path not in _CONSOLE_UI_URL_PATHS or (port is not None and port < 1):
+        raise RuntimeSettingsError(problem)
+    if not (_CONSOLE_UI_URL_HOST.fullmatch(host) or (":" in host and _CONSOLE_UI_URL_IPV6.fullmatch(host))):
+        raise RuntimeSettingsError(problem)
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None and port != 443:
+        netloc = f"{netloc}:{port}"
+    result = f"https://{netloc}{CONSOLE_UI_URL_PATH}"
+    if len(result) > MAX_CONSOLE_UI_URL_LENGTH:
+        raise RuntimeSettingsError(f"{SETTING_CONSOLE_UI_URL} must be at most {MAX_CONSOLE_UI_URL_LENGTH} characters.")
+    return result
+
+
+def read_console_ui_url_setting() -> str:
+    """The stored console_ui_url text, unvalidated ('' when unset). A database fault is raised: console_certificates.console_ui_url
+    treats it as unavailable and never falls back to another source."""
+    return str(TecTacRuntimeConfig.current().console_ui_url or "")
+
+
 def get_console_certificate_validity_days() -> int:
     """How many days a new Console certificate lasts. Never raises: any failure, or a stored value outside 1 to 730, gives 365."""
     try:
@@ -228,6 +284,7 @@ def serialize_runtime_settings(config=None) -> dict:
         SETTING_SYSTEM_NAME: _serialize_system_name(config),
         SETTING_LICENSING_MODE: serialize_mode(getattr(config, SETTING_LICENSING_MODE, "")),
         SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS: _serialize_console_validity(config),
+        SETTING_CONSOLE_UI_URL: _serialize_console_ui_url(config),
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
         "updated_by": config.updated_by.username if config.updated_by else None,
     }
@@ -258,6 +315,14 @@ def _serialize_console_validity(config) -> dict:
         "maximum": MAX_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
         "default": DEFAULT_CONSOLE_CERTIFICATE_VALIDITY_DAYS,
     }
+
+
+def _serialize_console_ui_url(config) -> dict:
+    try:
+        value = validate_console_ui_url(str(getattr(config, SETTING_CONSOLE_UI_URL, "") or ""))
+    except (TypeError, ValueError, RuntimeSettingsError):
+        value = ""  # a stored value that does not validate is unavailable to the Console (never a silent fall-back), and shows as unset
+    return {"value": value, "maximum_length": MAX_CONSOLE_UI_URL_LENGTH, "default": ""}
 
 
 def _serialize_system_name(config) -> dict:
@@ -373,6 +438,8 @@ class RuntimeSettingsView(APIView):
                 _deny_superuser_only(request, SETTING_LICENSING_MODE, LICENSING_MODE_DENIED)
             if SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS in data:
                 _deny_superuser_only(request, SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS, CONSOLE_VALIDITY_DENIED)
+            if SETTING_CONSOLE_UI_URL in data:
+                _deny_superuser_only(request, SETTING_CONSOLE_UI_URL, CONSOLE_UI_URL_DENIED)
         changes = {}
         try:
             if SETTING_MODULE_REGISTER_TIMEOUT in data:
@@ -389,6 +456,10 @@ class RuntimeSettingsView(APIView):
                 changes[SETTING_LICENSING_MODE] = "" if mode is None else validate_licensing_enforcement_mode(mode)
             if SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS in data:
                 changes[SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS] = validate_console_certificate_validity_days(data[SETTING_CONSOLE_CERTIFICATE_VALIDITY_DAYS])
+            if SETTING_CONSOLE_UI_URL in data:
+                # JSON null (or empty text) resets the address to unset.
+                address = data[SETTING_CONSOLE_UI_URL]
+                changes[SETTING_CONSOLE_UI_URL] = "" if address is None else validate_console_ui_url(address)
         except RuntimeSettingsError as exc:
             return Response({"detail": str(exc)}, status=400)
         with transaction.atomic():

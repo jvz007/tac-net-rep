@@ -60,7 +60,8 @@ response = h.enrol(code, console)
 must(response.status_code == 201, f"{response.status_code} {response.data}")
 must(response["Cache-Control"] == "no-store", "the bundle is no-store")
 bundle = response.data
-must(set(bundle) == {"v", "host", "server_id", "ca_public_key", "ca_cert", "cert", "serial", "not_after", "engineer"}, f"bundle keys: {sorted(bundle)}")
+must(set(bundle) == {"v", "host", "server_id", "ca_public_key", "ca_cert", "cert", "serial", "not_after", "engineer", "ui_url"}, f"bundle keys: {sorted(bundle)}")  # ui_url: 1.18.58, additive
+must(bundle["ui_url"] is None or str(bundle["ui_url"]).startswith("https://"), "ui_url is an https address or None")
 must(bundle["v"] == 1 and bundle["host"] == HOST and bundle["engineer"] == {"id": user.pk, "username": user.username}, "bundle values")
 
 

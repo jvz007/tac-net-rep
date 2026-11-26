@@ -121,7 +121,7 @@ for code in ("session_idle_timeout", "session_absolute_timeout", "session_ip_cha
 
 # the capability, the files and the numbers modules rely on
 for needle in ("core.console_session", "ConsoleSessionAuthentication", "ConsoleSessionAuthenticated", "console_info", "framework >=1.18.56", "certificate_engineer_mismatch",
-               "core.probe_transport` stays at 1.3.0", "never mints or stores", "One live Console session per certificate serial"):
+               "core.probe_transport` was not changed by Console sessions", "never mints or stores", "One live Console session per certificate serial"):
     must(needle in DOC, f"the document says {needle}")
 for other in ("console-certificates.md", "probe-transport.md"):
     must(other in DOC, f"the document points to {other}")

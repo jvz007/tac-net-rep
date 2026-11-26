@@ -61,9 +61,14 @@ for path in sorted((ROOT / "extensions").rglob("*.py")) if (ROOT / "extensions")
 
 urls_text = (APP / "urls.py").read_text(encoding="utf-8")
 paths = re.findall(r'path\("(console-sessions/[^"]*)", (\w+)\.as_view\(\)', urls_text)
-must(sorted(p for p, _ in paths) == ["console-sessions/activity/", "console-sessions/authorise/", "console-sessions/current/", "console-sessions/sign-out/", "console-sessions/token/"],
-     f"the five routes: {paths}")
-must({v for _, v in paths} == {"ConsoleSessionActivityView", "ConsoleSessionAuthoriseView", "ConsoleSessionCurrentView", "ConsoleSessionSignOutView", "ConsoleSessionTokenView"}, "each is one of the five views")
+must(sorted(p for p, _ in paths) == ["console-sessions/activity/", "console-sessions/authorise/", "console-sessions/current/", "console-sessions/sign-in-info/", "console-sessions/sign-out/", "console-sessions/token/"],
+     f"the six routes (1.18.58 added sign-in-info/): {paths}")
+must({v for _, v in paths} == {"ConsoleSessionActivityView", "ConsoleSessionAuthoriseView", "ConsoleSessionCurrentView", "ConsoleSessionSignInInfoView", "ConsoleSessionSignOutView", "ConsoleSessionTokenView"}, "each is one of the six views")
+# 1.18.58: sign-in-info/ is the only new route with no sign-in; it never uses the Console authentication either, and only token/ and it are open
+must(assigned(classes["ConsoleSessionSignInInfoView"], "authentication_classes") == "[]" and assigned(classes["ConsoleSessionSignInInfoView"], "permission_classes") == "[AllowAny]", "sign-in-info is open and says so")
+must("ConsoleSessionAuthentication" not in ast.unparse(classes["ConsoleSessionSignInInfoView"]) and "_ConsoleOnlyView" not in ast.unparse(classes["ConsoleSessionSignInInfoView"]), "sign-in-info does not use the Console authentication")
+open_views = sorted(n for n, c in classes.items() if assigned(c, "permission_classes") == "[AllowAny]")
+must(open_views == ["ConsoleSessionSignInInfoView", "ConsoleSessionTokenView"], f"the only open Console-session routes: {open_views}")
 for route, view in paths:
     must(("Console-only" if view in CONSOLE_ONLY else "other") == ("Console-only" if route.split("/")[1] in ("current", "activity", "sign-out") else "other"), f"{route} maps to the right kind")
 tactical_auth = (APP / "session_security.py").read_text(encoding="utf-8")
@@ -72,7 +77,8 @@ must('"TecTacConsole "' in tactical_auth, "the session guard's branch names the 
 modules_dir = ROOT.parent.parent / "modules"
 if modules_dir.is_dir():
     users = [str(p.relative_to(modules_dir)) for p in modules_dir.rglob("*.py") if "TecTacConsole" in p.read_text(encoding="utf-8", errors="ignore") and "console_session" in p.read_text(encoding="utf-8", errors="ignore")]
-    must(not users, f"no module uses the new capability yet (networkprobe's M1 will): {users}")
+    others = [u for u in users if not u.replace("\\", "/").startswith("networkprobe/")]
+    must(not others, f"only networkprobe (M1, since 1.18.57) uses the capability: {others}")
 
 h = H.boot()
 if h is None:

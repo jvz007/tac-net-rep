@@ -212,6 +212,9 @@ class TecTacRuntimeConfig(models.Model):
     update_sources = models.JSONField(default=dict, blank=True)
     # How many days a new Engineer Console certificate lasts (1.18.52). Core accepts 1 to 730; an unreadable value reads as 365.
     console_certificate_validity_days = models.PositiveIntegerField(default=365)
+    # The https address of the Tec-Tac web page the Engineer Console opens for its sign-in (1.18.58), always ending /tec-tac/. Empty means unset:
+    # Core then reads the single https origin in Tactical's CORS settings (console_certificates.console_ui_url). Never from a request.
+    console_ui_url = models.CharField(max_length=300, blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="tec_tac_runtime_config_updates")
 

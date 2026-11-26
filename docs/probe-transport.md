@@ -1,6 +1,6 @@
 # Network Probe transport (Core 1.18.47)
 
-Core 1.18.46 added one websocket for the Network Probe and one contract for the module that owns it. Core 1.18.47 adds the tunnel to it. The capability is `core.probe_transport`: 1.0.0 is the control channel (framework 1.18.46 or later) and 1.1.0 adds the tunnel (framework 1.18.47 or later). 1.1.0 is additive: nothing in 1.0.0 changed. 1.2.0 (framework 1.18.50) adds the site scope and 1.3.0 (framework 1.18.53) adds the Engineer Console certificate (see "Console certificates (1.3.0)" below). Both are additive too.
+Core 1.18.46 added one websocket for the Network Probe and one contract for the module that owns it. Core 1.18.47 adds the tunnel to it. The capability is `core.probe_transport`: 1.0.0 is the control channel (framework 1.18.46 or later) and 1.1.0 adds the tunnel (framework 1.18.47 or later). 1.1.0 is additive: nothing in 1.0.0 changed. 1.2.0 (framework 1.18.50) adds the site scope and 1.3.0 (framework 1.18.53) adds the Engineer Console certificate (see "Console certificates (1.3.0)" below) and 1.4.0 (framework 1.18.58) a list of permissions on the ticket (see "Permission lists (1.4.0)" below). All are additive too.
 
 Core owns the connection and its security. The module `networkprobe` owns who a probe is, what the messages mean and the probe record. Core never reads `func`.
 
@@ -148,10 +148,11 @@ Five operations, for `networkprobe` only (Core verifies the caller; `module_id` 
 
 ### The ticket
 
-`spec` is `{session_id, probe_id, permission, target_label, idle_s, cap_s, site_id}`:
+`spec` is `{session_id, probe_id, permission and/or permissions, target_label, idle_s, cap_s, site_id}`:
 
 * `session_id` is a uuid4 string. One ticket per session and no resume: a second ticket for the same id is refused (`session_exists`), even after the session ended.
 * `permission` is a `networkprobe.` permission code the engineer must hold. Core checks it again at connect and every 5 minutes.
+* `permissions` (1.4.0) is a list of 1 to 4 distinct `networkprobe.` codes the engineer must all hold. At least one of `permission` and `permissions` is required; if both are sent, `permission` must be in the list. See "Permission lists (1.4.0)".
 * `target_label` is audit text only (at most 128 characters).
 * `idle_s` is 60 to 900 (default 900). `cap_s` is 60 to 14400 (default 14400).
 * `site_id` (1.2.0, optional) is the probe's site, a positive integer (not a boolean). Send it: without it Core checks no scope.
@@ -230,6 +231,17 @@ Core keeps the engineer's access to the probe's site true for as long as a sessi
 * While the session runs, the 5 second tick ends it at the certificate's end and when a revoke or CA-replacement marker exists; the 5-minute re-check re-reads the certificate row first. A revoke ends the live sessions of that certificate at once, and a CA replacement ends every live session. Since 1.18.55 the end runs in a background task; the marker ends a session within 5 seconds even if the task never runs (the request only writes the marker and queues the task, with one bounded 2 second broker attempt). The end row's `detail` is `certificate_revoked`, `certificate_expired` or `ca_replaced`; the close reason stays `ended_by_core`. These details are in Core's own end row. They are not yet published to the owner's `tunnel_status` or `tunnel.closed` event.
 * `custom:probe-tunnel-connect` and `custom:probe-tunnel-end` carry `cert_serial`.
 
+### Permission lists (1.4.0)
+
+`core.probe_transport` 1.4.0 needs framework 1.18.58 or later. It is additive: no operation, argument or answer shape was removed. The single `permission` form is the compatibility path and behaves exactly as in 1.3.0.
+
+* `spec` takes `permissions`, a list of 1 to 4 distinct strings, each a `networkprobe.` code. Core refuses any other shape (an empty list, more than 4, a duplicate, a non-list, a non-string, a code outside the pattern) with `invalid` and the code `invalid_spec`.
+* At least one of `permission` and `permissions` must be present. If both are sent, `permission` must be one of the list; otherwise `invalid_spec`.
+* Every permission must hold. Core checks all of them at the ticket (`denied`, code `permission_missing`, one deny row, no slot and no rate budget), at the Console connect (close 4401 `permission_missing`) and at every re-check: the 5-minute one, the 5-second access-marker tick and the re-check after `set_tunnel_site`. A person who loses any one of them ends the session `ended_by_core` with detail `permission_missing`. Losing a permission that is not in the list ends nothing.
+* The ticket and the session record keep `permission` (the first code of the list when only `permissions` was sent) and add `permissions`. A record made by Core 1.18.57 has no list and is read as the single `permission`, so a session that was open at the upgrade keeps working. A malformed list fails closed (`permission_missing`).
+* The ticket audit row keeps `permission` and adds `permission_count` when the list has more than one code. The list itself is never written, so every value stays inside the 128-character limit.
+* `networkprobe` 0.2.29 sends the single `permission` and needs no change. It can adopt the list for a custom session (`networkprobe.tunnel` and `networkprobe.tunnel_custom`) and drop its own 5-minute sweep once it requires framework 1.18.58.
+
 ### Frames
 
 One binary websocket message is one frame: `[type u8][stream u32 BE][payload]`. `OPEN` is 1, `DATA` 2, `ACK` 3 and `CLOSE` 4 (its payload is one reason byte). Stream id 0 is never used. A DATA payload is at most `MAX_DATA` (32 KiB). Each stream has a `STREAM_WINDOW` of 128 KiB, a session has at most `MAX_STREAMS` (8) streams and `SESSION_IN_FLIGHT` is 1 MiB per direction. Those are the two ends' rules (the end-to-end window already bounds the sender).
@@ -289,10 +301,10 @@ payload: {session_id, reason, ended_by, bytes_up, bytes_down, source: "core"}
 
 The Console consumer sends it at its close with the final counters. When the Console never attached, whoever ended the session sends it with zero counters. When the probe socket's backstop ended the session, the probe socket sends it with the last flushed counters. The probe's own `tunnel.closed` event arrives through the normal event path; `source` tells them apart.
 
-Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket` (engineer, session id and permission; no target), `custom:probe-tunnel-connect` (with the side, and `cert_serial` for the Console side since 1.3.0), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`, and `cert_serial` for an attached Console) and `custom:probe-tunnel-refused` (reason code). A refused Console certificate or proof writes one `custom:console-cert-refused` row instead (provenance `console-certificates`). Never a ticket, key, header, payload or target address, and never a certificate or a proof.
+Audit rows (non-strict, module `core`, provenance `probe-transport`, object type `probe`, no per-frame rows): `custom:probe-tunnel-ticket` (engineer, session id and permission, and `permission_count` when the ticket asked for more than one; never the list; no target), `custom:probe-tunnel-connect` (with the side, and `cert_serial` for the Console side since 1.3.0), `custom:probe-tunnel-end` (session id, probe id, engineer, reason, `ended_by`, duration, `bytes_up`, `bytes_down`, and `cert_serial` for an attached Console) and `custom:probe-tunnel-refused` (reason code). A refused Console certificate or proof writes one `custom:console-cert-refused` row instead (provenance `console-certificates`). Never a ticket, key, header, payload or target address, and never a certificate or a proof.
 
 The end row of a session with an attached Console is written by that Console's consumer at its close, with its final counters. A server process that dies without closing its sockets leaves no end row for that session; its slot heals at its expiry.
 
 ## The Engineer Console session and the tunnel (Core 1.18.56)
 
-An engineer signs in to the Engineer Console with a Console session (`docs/console-sessions.md`). A tunnel ticket asked for from such a session (the owner's request was authenticated by `ConsoleSessionAuthentication`) is tied to that session's certificate **serial**: the Console connect must carry that exact certificate, or Core closes it with `certificate_engineer_mismatch` (already one of the seven certificate reasons). A ticket asked for from the browser is not tied to a serial and works with any of the person's certificates, as before. When the Console session ends (sign-out, idle, absolute, a revoked certificate, a replaced CA, a deactivated account or an administrator's revoke), the tunnels opened from it end within about 10 seconds; a tunnel the same person opened from the browser is not touched. A replaced CA ends only the sessions that connected under the replaced CA. `core.probe_transport` stays at 1.3.0: no answer of `issue_tunnel_ticket` changed.
+An engineer signs in to the Engineer Console with a Console session (`docs/console-sessions.md`). A tunnel ticket asked for from such a session (the owner's request was authenticated by `ConsoleSessionAuthentication`) is tied to that session's certificate **serial**: the Console connect must carry that exact certificate, or Core closes it with `certificate_engineer_mismatch` (already one of the seven certificate reasons). A ticket asked for from the browser is not tied to a serial and works with any of the person's certificates, as before. When the Console session ends (sign-out, idle, absolute, a revoked certificate, a replaced CA, a deactivated account or an administrator's revoke), the tunnels opened from it end within about 10 seconds; a tunnel the same person opened from the browser is not touched. A replaced CA ends only the sessions that connected under the replaced CA. `core.probe_transport` was not changed by this (1.3.0 in 1.18.56; 1.18.58 made it 1.4.0 for the permission list): no answer of `issue_tunnel_ticket` changed.

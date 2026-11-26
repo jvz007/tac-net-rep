@@ -100,12 +100,16 @@ before = current.clone()
 for name in ("tectacconsolecertificate", "tectacconsoleca", "tectacconsoleenrolment"):
     before.remove_model("tec_tac", name)
 before.models[("tec_tac", "tectacruntimeconfig")].fields.pop("console_certificate_validity_days")
+before.models[("tec_tac", "tectacruntimeconfig")].fields.pop("console_ui_url")  # 1.18.58: 0052 adds it
 mig = importlib.import_module("tec_tac.migrations.0049_console_certificates").Migration
 state = before.clone()
 for op in mig.operations:
     op.state_forwards("tec_tac", state)
 # 1.18.57: 0051 adds the PKCE challenge column to the enrolment; apply it too, so only a real disagreement is left over
 for op in importlib.import_module("tec_tac.migrations.0051_console_enrolment_pkce").Migration.operations:
+    op.state_forwards("tec_tac", state)
+# 1.18.58: 0052 adds console_ui_url to the runtime configuration
+for op in importlib.import_module("tec_tac.migrations.0052_console_ui_url").Migration.operations:
     op.state_forwards("tec_tac", state)
 changes = MigrationAutodetector(state, current)._detect_changes()
 leftover = {app: [(m.name, [type(o).__name__ + ":" + str(getattr(o, "name", getattr(o, "model_name", ""))) for o in m.operations]) for m in ms] for app, ms in changes.items() if app == "tec_tac"}

@@ -72,6 +72,7 @@ END_BUDGET_SECONDS = 10  # the most one revoke or CA replacement spends ending s
 TICKET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")  # secrets.token_urlsafe(32) is 43 characters
 CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9._!-]{1,200}$")  # a channels specific channel name; anything else is refused
 PERMISSION_PATTERN = re.compile(r"^networkprobe\.[a-z0-9_.]{1,100}$")
+MAX_PERMISSIONS = 4  # 1.18.58: how many permissions one ticket may require together (core.probe_transport 1.4.0)
 HOST_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$")
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 PROOF_PATTERN = re.compile(r"^v1\.([0-9]{1,12})\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{86})$")
@@ -375,15 +376,28 @@ def extend_slot(session_id: str, seconds: float) -> None:
 # ------------------------------------------------------------------------------------------------ spec and refusals
 def _clean_spec(spec):
     """A cleaned dict, or None when the spec is not valid."""
-    if not isinstance(spec, dict) or set(spec) - {"session_id", "probe_id", "permission", "target_label", "idle_s", "cap_s", "site_id"}:
+    if not isinstance(spec, dict) or set(spec) - {"session_id", "probe_id", "permission", "permissions", "target_label", "idle_s", "cap_s", "site_id"}:
         return None
     session_id = _clean_session_id(spec.get("session_id"))
     probe_id = spec.get("probe_id")
-    permission = spec.get("permission")
     if session_id is None or not isinstance(probe_id, str) or not pt.PROBE_ID_PATTERN.fullmatch(probe_id):
         return None
-    if not isinstance(permission, str) or not PERMISSION_PATTERN.fullmatch(permission):
-        return None
+    permission = spec.get("permission")
+    if "permissions" not in spec:  # the 1.1.0 form: one permission
+        if not isinstance(permission, str) or not PERMISSION_PATTERN.fullmatch(permission):
+            return None
+        permissions = [permission]
+    else:  # 1.18.58: a list of 1 to 4 distinct permissions that must all hold; a given `permission` must be one of them
+        permissions = spec.get("permissions")
+        if not isinstance(permissions, list) or not 1 <= len(permissions) <= MAX_PERMISSIONS:
+            return None
+        if any(not isinstance(p, str) or not PERMISSION_PATTERN.fullmatch(p) for p in permissions) or len(set(permissions)) != len(permissions):
+            return None
+        if "permission" in spec:
+            if not isinstance(permission, str) or permission not in permissions:
+                return None
+        else:
+            permission = permissions[0]
     site_id = spec.get("site_id")  # 1.18.50: optional; absent means no scope check by Core (see scope_refusal)
     if site_id is not None and (isinstance(site_id, bool) or not isinstance(site_id, int) or site_id <= 0):
         return None
@@ -394,7 +408,7 @@ def _clean_spec(spec):
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
             return None
         numbers[name] = value
-    return {"session_id": session_id, "probe_id": probe_id, "permission": permission, "target_label": pt.clean_label(spec.get("target_label")), "site_id": site_id, **numbers}
+    return {"session_id": session_id, "probe_id": probe_id, "permission": permission, "permissions": permissions, "target_label": pt.clean_label(spec.get("target_label")), "site_id": site_id, **numbers}
 
 
 def _audit(action: str, probe_id=None, **kwargs) -> None:
@@ -520,7 +534,7 @@ def issue_ticket(request, caller: str, spec) -> dict:
     if not digest:
         return _refusal("denied", "tactical_session_required", user=user, probe_id=probe_id, session_id=sid)
     try:
-        allowed = bool(has_extension_permission(user, clean["permission"]))
+        allowed = all(bool(has_extension_permission(user, p)) for p in clean["permissions"])
     except ValueError:
         return _refusal("invalid", "invalid_spec", user=user, probe_id=probe_id, session_id=sid)
     except Exception:
@@ -561,11 +575,11 @@ def issue_ticket(request, caller: str, spec) -> dict:
     now = time.time()
     record = {
         "session_id": sid, "probe_id": probe_id, "user_id": user.pk, "module_id": caller, "permission": clean["permission"],
-        "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "target": clean["target_label"], "created": now, "site_id": clean["site_id"],
+        "permissions": clean["permissions"], "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "target": clean["target_label"], "created": now, "site_id": clean["site_id"],
     }
     value = {
         "user_id": user.pk, "trust_id": str(getattr(session, "id", "")), "knox_digest": digest, "session_id": sid, "probe_id": probe_id,
-        "module_id": caller, "permission": clean["permission"], "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "expires_at": now + TICKET_TTL_SECONDS,
+        "module_id": caller, "permission": clean["permission"], "permissions": clean["permissions"], "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "expires_at": now + TICKET_TTL_SECONDS,
     }
     bound = _console_serial_of(request)
     if bound:  # 1.18.56: asked for from an Engineer Console session: the connect must use that session's own certificate (cache only, never shown)
@@ -597,7 +611,10 @@ def issue_ticket(request, caller: str, spec) -> dict:
     except Exception:
         logger.warning("The tunnel session index is unavailable; no ticket issued.", exc_info=True)
         return _refusal("unavailable", "unavailable", user=user, probe_id=probe_id, session_id=sid)
-    _audit("custom:probe-tunnel-ticket", probe_id, extra={"engineer": user.pk, "session_id": sid, "permission": clean["permission"]})
+    audit_extra = {"engineer": user.pk, "session_id": sid, "permission": clean["permission"]}
+    if len(clean["permissions"]) > 1:  # 1.18.58: the count only, never the list (every audit value stays inside its 128-character limit)
+        audit_extra["permission_count"] = len(clean["permissions"])
+    _audit("custom:probe-tunnel-ticket", probe_id, extra=audit_extra)
     return {"outcome": "ok", "ticket": ticket, "launch_url": launch, "expires_in": TICKET_TTL_SECONDS, "session_id": sid}
 
 
@@ -638,10 +655,23 @@ def _attach(session_id: str, side: str, extra: dict | None = None) -> bool:
     return bool(_cache().add(side_key(session_id, side), {"at": time.time(), **(extra or {})}, _keep_seconds()))
 
 
-def account_refusal(value: dict, permission: str, activity_at=None) -> str | None:
+def _permissions_of(data) -> list:
+    """The permissions a ticket value or session record requires: ``permissions`` (1.18.58), else the single ``permission`` (a record made by
+    1.18.57 or by a single-permission caller). Anything malformed gives an empty list, which account_refusal refuses (permission_missing)."""
+    if not isinstance(data, dict):
+        return []
+    found = data.get("permissions") if "permissions" in data else [data.get("permission")]
+    if not isinstance(found, list) or not 1 <= len(found) <= MAX_PERMISSIONS:
+        return []
+    if any(not isinstance(p, str) or not PERMISSION_PATTERN.fullmatch(p) for p in found):
+        return []
+    return list(found)
+
+
+def account_refusal(value: dict, permission, activity_at=None) -> str | None:
     """Why the person behind a ticket may no longer tunnel, or None. Checks the sign-in (the user is active and not blocked, the Knox token
     is live, the Tec-Tac session is not revoked, idle or past its absolute lifetime: session_security.record_terminal_activity with the
-    last DATA time as activity), the permission, and that the owning module is still installed and enabled. Sync; any error is a refusal."""
+    last DATA time as activity), the permission (one code or, since 1.18.58, a list that must all hold; an empty list refuses), and that the owning module is still installed and enabled. Sync; any error is a refusal."""
     from django.contrib.auth import get_user_model
 
     from .rbac import has_extension_permission
@@ -652,7 +682,8 @@ def account_refusal(value: dict, permission: str, activity_at=None) -> str | Non
         if reason:
             return reason
         user = get_user_model().objects.filter(pk=value["user_id"]).first()
-        if user is None or not has_extension_permission(user, permission):
+        required = [permission] if isinstance(permission, str) else list(permission or [])
+        if user is None or not required or not all(bool(has_extension_permission(user, p)) for p in required):
             return "permission_missing"
         if pt._owner_folder(pt.OWNER_MODULE) is None:
             return "module_disabled"
@@ -686,7 +717,7 @@ def console_open(ticket: str, headers=None, host=None):
     bound = value.get("console_serial")  # 1.18.56: a ticket asked for from a Console session connects only with that session's certificate
     if bound and bound != verified["serial"]:
         return "certificate", {**value, "cert_serial": verified["serial"]}, None, "certificate_engineer_mismatch"
-    refusal = account_refusal(value, value["permission"])
+    refusal = account_refusal(value, _permissions_of(value))
     if refusal:
         return "unauthorized", value, None, refusal
     record = get_record(value["session_id"])
@@ -725,7 +756,7 @@ def console_recheck(value: dict, record: dict, activity_at=None) -> str | None:
             return "check_failed"
         if reason:
             return reason
-    reason = account_refusal(value, record["permission"], activity_at)
+    reason = account_refusal(value, _permissions_of(record), activity_at)
     if reason:
         return reason
     live = get_record(record["session_id"]) or record  # the live record: the owner may have moved the probe to another site since connect
