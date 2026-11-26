@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 1.18.54: daphne, celery and celerybeat get the Tactical group like rmm, so every service that can call the secret store can read the master.key|www-data|chmod 066|chmod 0[0-7]*[67]".
+# 1.18.54: daphne, celery and celerybeat get the Tactical group like rmm, so every service that can call the secret store can read the master key.
+# 1.18.55: the live process check moved into service_group_check (tests/install-service-key-group-1.18.55.sh); this test reads the function and the loop together.
 #
 # install.sh needs root and systemd, so this test cannot run it. It extracts the drop-in function by its own text, runs it against a temporary
 # folder with a fake systemctl and chown, and asserts on the text of the post-install check and of uninstall.sh.
@@ -79,17 +80,23 @@ if sed -n "${FN_START},${FN_END}p" "${INSTALL}" | grep -q 'master.key\|www-data'
 [[ "$(sed -n "${FN_START},${FN_END}p" "${INSTALL}" | grep -c 'chmod')" == "1" ]] || fail "the function sets one mode only"
 
 # the post-install check covers every service, in both tests, and names the service
-CHECK_START="$(line_of "${INSTALL}" 'for key_svc in ${KEY_GROUP_SERVICES}; do')"
+CHECK_START="$(line_of "${INSTALL}" 'service_group_check() {')"
+LOOP_START="$(line_of "${INSTALL}" 'for key_svc in ${KEY_GROUP_SERVICES}; do')"
+[[ -n "${CHECK_START}" && -n "${LOOP_START}" ]] || fail "check function or loop not found"
 [[ -n "${CHECK_START}" ]] || fail "post-install check loop not found"
-CHECK_END="$(awk -v s="${CHECK_START}" 'NR>s && /^done$/ {print NR; exit}' "${INSTALL}")"
+CHECK_END="$(awk -v s="${LOOP_START}" 'NR>s && /^done$/ {print NR; exit}' "${INSTALL}")"
 sed -n "${CHECK_START},${CHECK_END}p" "${INSTALL}" > "${TMP}/check.sh"
 grep -q 'systemctl show "${key_svc}.service" -p SupplementaryGroups --value' "${TMP}/check.sh" || fail "check does not read SupplementaryGroups"
-grep -q 'systemctl show "${key_svc}.service" -p MainPID --value' "${TMP}/check.sh" || fail "check does not read MainPID"
-grep -q '/proc/${SVC_PID}/status' "${TMP}/check.sh" || fail "check does not read /proc status"
+grep -q 'systemctl show "${svc}.service" -p MainPID --value' "${TMP}/check.sh" || fail "check does not read MainPID"
+grep -q '${PROC_ROOT}/${pid}/status' "${TMP}/check.sh" || fail "check does not read /proc status"
 grep -q '^Groups:\|/\^Groups:/' "${TMP}/check.sh" || fail "check does not read the Groups line"
 grep -q '${key_svc}.service did not load required supplementary group' "${TMP}/check.sh" || fail "failure message does not name the service"
 grep -q 'Nothing was changed on the key' "${TMP}/check.sh" || fail "failure message lacks the key note"
-if grep -q 'master.key|www-data|chmod 066|chmod 0[0-7]*[67]"' "${TMP}/check.sh"; then fail "the check must not read the key"; fi
+# the guard must be able to fail: the extended-regex pattern has to match a sample that touches the key (1.18.55: the old basic-regex pattern read | as a literal)
+KEY_GUARD='master\.key|www-data|chmod'
+echo 'chmod 660 master.key' > "${TMP}/bad-sample.sh"
+grep -Eq "${KEY_GUARD}" "${TMP}/bad-sample.sh" || fail "the key guard does not match a sample that changes the key mode"
+if grep -Eq "${KEY_GUARD}" "${TMP}/check.sh"; then fail "the check must not read the key"; fi
 ok "the post-install check covers rmm, daphne, celery and celerybeat by systemctl and by /proc Groups"
 
 # uninstall removes all four and still reloads systemd

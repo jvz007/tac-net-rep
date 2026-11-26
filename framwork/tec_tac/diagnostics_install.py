@@ -224,24 +224,91 @@ def ui_module_sync_check(layout_reader: Callable[[], dict], lstat: Callable[[str
     return _check(UI_SYNC_ID, label, "pass", "The UI sync program is published, root-owned, not older than the installed UI, and its path unit is enabled.", details=details, metadata=metadata)
 
 
-def _service_row(service: str, pid_reader: Callable[[str], Any], status_reader: Callable[[int], str], key_gid: int) -> dict:
-    """One service's answer: ok, missing_group, not_running or unknown. Only the Groups line of /proc/<pid>/status is read."""
+def _groups_of(text: str):
+    """The group ids on the Groups line of a /proc status text, or None when there is no such line."""
+    for line in str(text).splitlines():
+        if line.startswith("Groups:"):
+            return line[len("Groups:"):].split()
+    return None
+
+
+def _uid_of(text: str):
+    """The real user id on the Uid line of a /proc status text, or None."""
+    for line in str(text).splitlines():
+        if line.startswith("Uid:"):
+            fields = line[len("Uid:"):].split()
+            return fields[0] if fields else None
+    return None
+
+
+def _read_uid(uid_reader, service: str):
+    try:
+        return uid_reader(service) if uid_reader is not None else None
+    except (OSError, TimeoutError, ValueError, KeyError):
+        return None
+
+
+def _cgroup_row(service: str, process_reader, status_reader, key_gid: int, uid) -> dict:
+    """1.18.55: the answer for an active unit whose MainPID systemd cannot name (celery is Type=forking with no PIDFile). It looks at the
+    processes in the unit control group that run as the service user. ok when at least one was inspected and every one carries the key group;
+    missing_group when one does not; unknown (never a pass) when none could be inspected. A process that exited while it was read is skipped."""
+    try:
+        pids = list(process_reader(f"{service}.service") or [])
+    except (OSError, TimeoutError, ValueError) as exc:
+        return {"service": service, "state": "unknown", "reason": f"The service processes could not be listed ({exc.__class__.__name__})."}
+    if uid is None:
+        return {"service": service, "state": "unknown", "reason": "The service user id could not be read."}
+    inspected = 0
+    for pid in pids:
+        try:
+            text = status_reader(int(pid))
+        except (OSError, ValueError):
+            continue
+        if _uid_of(text) != str(uid):
+            continue
+        groups = _groups_of(text)
+        if groups is None:
+            continue
+        inspected += 1
+        if str(key_gid) not in groups:
+            return {"service": service, "state": "missing_group", "reason": f"A live process of the service does not carry group id {key_gid}."}
+    if inspected == 0:
+        return {"service": service, "state": "unknown", "reason": "No process of the service could be inspected."}
+    return {"service": service, "state": "ok"}
+
+
+def _service_row(service: str, pid_reader: Callable[[str], Any], status_reader: Callable[[int], str], key_gid: int,
+                 active_reader: Callable[[str], Any] | None = None, process_reader: Callable[[str], Any] | None = None,
+                 uid_reader: Callable[[str], Any] | None = None) -> dict:
+    """One service answer: ok, missing_group, not_running or unknown. Only the Uid and Groups lines of /proc/<pid>/status are read.
+
+    1.18.55: when MainPID is 0 or cannot be used and the readers for the unit state and control group are given, an active unit is checked
+    through the processes of its control group instead. not_running only means the unit is not active."""
+    fallback = active_reader is not None and process_reader is not None
     try:
         raw = pid_reader(f"{service}.service")
         pid = int(str(raw).strip() or 0)
     except (OSError, TimeoutError, ValueError) as exc:
-        return {"service": service, "state": "unknown", "reason": f"The service's process id could not be read ({exc.__class__.__name__})."}
+        if not fallback:
+            return {"service": service, "state": "unknown", "reason": f"The service process id could not be read ({exc.__class__.__name__})."}
+        pid = 0
     if pid <= 1:
-        return {"service": service, "state": "not_running", "reason": "The service has no running process."}
+        if not fallback:
+            return {"service": service, "state": "not_running", "reason": "The service has no running process."}
+        try:
+            active = str(active_reader(f"{service}.service")).strip().lower() == "active"
+        except (OSError, TimeoutError, ValueError) as exc:
+            return {"service": service, "state": "unknown", "reason": f"The service state could not be read ({exc.__class__.__name__})."}
+        if not active:
+            return {"service": service, "state": "not_running", "reason": "The service has no running process."}
+        return _cgroup_row(service, process_reader, status_reader, key_gid, _read_uid(uid_reader, service))
     try:
         text = status_reader(pid)
     except OSError as exc:
-        return {"service": service, "state": "unknown", "reason": f"The process's group list could not be read ({exc.__class__.__name__})."}
-    groups = None
-    for line in str(text).splitlines():
-        if line.startswith("Groups:"):
-            groups = line[len("Groups:"):].split()
-            break
+        if fallback:
+            return _cgroup_row(service, process_reader, status_reader, key_gid, _read_uid(uid_reader, service))
+        return {"service": service, "state": "unknown", "reason": f"The process group list could not be read ({exc.__class__.__name__})."}
+    groups = _groups_of(text)
     if groups is None:
         return {"service": service, "state": "unknown", "reason": "The process status has no Groups line."}
     if str(key_gid) in groups:
@@ -251,9 +318,11 @@ def _service_row(service: str, pid_reader: Callable[[str], Any], status_reader: 
 
 def secret_key_service_access_check(key_stat: Callable[[str], Any] = os.stat, pid_reader: Callable[[str], Any] | None = None,
                                     status_reader: Callable[[int], str] | None = None, key_path: str = DEFAULT_MASTER_KEY_PATH,
-                                    services: tuple = KEY_ACCESS_SERVICES) -> dict:
+                                    services: tuple = KEY_ACCESS_SERVICES, active_reader: Callable[[str], Any] | None = None,
+                                    process_reader: Callable[[str], Any] | None = None, uid_reader: Callable[[str], Any] | None = None) -> dict:
     """1.18.54: does each running Core service carry the group that owns the secret store master key? Read-only and Django-free. The
-    key file is only stat-ed (its group id); its content is never opened. The answer holds service names, group numbers and states."""
+    key file is only stat-ed (its group id); its content is never opened. The answer holds service names, group numbers and states. Since
+    1.18.55 the optional readers let a unit whose MainPID is 0 (celery) be checked through the processes of its control group."""
     label = "Services can read the secret store key"
     try:
         key_gid = int(key_stat(key_path).st_gid)
@@ -261,7 +330,7 @@ def secret_key_service_access_check(key_stat: Callable[[str], Any] = os.stat, pi
         return _check(KEY_ACCESS_ID, label, "unknown", f"The master key file could not be inspected ({_reason(exc)}), so no service was compared with it.")
     if pid_reader is None or status_reader is None:
         return _check(KEY_ACCESS_ID, label, "unknown", "No process reader was available, so no service was compared with the key's group.")
-    rows = [_service_row(service, pid_reader, status_reader, key_gid) for service in services]
+    rows = [_service_row(service, pid_reader, status_reader, key_gid, active_reader, process_reader, uid_reader) for service in services]
     details = {"key_group_id": key_gid, "services": rows}
     metadata = {"key_group_id": key_gid, "services": {r["service"]: r["state"] for r in rows}}
     missing = [r["service"] for r in rows if r["state"] == "missing_group"]

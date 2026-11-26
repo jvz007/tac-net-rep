@@ -1477,6 +1477,49 @@ for svc in rmm daphne celery celerybeat; do
     log "${svc}: module state readable by ${SERVICE_USER}"
 done
 
+# 1.18.55: the live part of the key-group check, for one service. systemd cannot always name a MainPID (celery is Type=forking with no PIDFile,
+# so it can answer 0 or a short-lived parent). A usable MainPID (a number above 1 whose status file is readable) is checked as before. Otherwise
+# the processes in the unit's control group that run as the service user are checked (a root helper in the same group is ignored). It passes only
+# when at least one process was inspected and every inspected one carries the Tactical gid; it fails closed when none could be inspected. A process
+# that exits while it is being read is skipped. It never opens the key file. PROC_ROOT and CGROUP_ROOT exist so the test can point at fake trees.
+service_group_check() {
+    local svc="$1" gid="$2" group_name="$3"
+    local PROC_ROOT="${PROC_ROOT:-/proc}" CGROUP_ROOT="${CGROUP_ROOT:-/sys/fs/cgroup}"
+    local pid pids="" cgroup_path user uid proc content proc_uid live_groups inspected=0 from_cgroup=0
+    pid="$(systemctl show "${svc}.service" -p MainPID --value 2>/dev/null || true)"
+    if [[ "${pid}" =~ ^[0-9]+$ && "${pid}" -gt 1 && -r "${PROC_ROOT}/${pid}/status" ]]; then
+        pids="${pid}"
+    else
+        from_cgroup=1
+        cgroup_path="$(systemctl show "${svc}.service" -p ControlGroup --value 2>/dev/null || true)"
+        user="$(systemctl show "${svc}.service" -p User --value 2>/dev/null || true)"
+        [[ -n "${user}" ]] || user="root"
+        uid="$(id -u "${user}" 2>/dev/null || true)"
+        if [[ -n "${cgroup_path}" && "${uid}" =~ ^[0-9]+$ && -r "${CGROUP_ROOT}${cgroup_path}/cgroup.procs" ]]; then
+            pids="$(cat "${CGROUP_ROOT}${cgroup_path}/cgroup.procs" 2>/dev/null || true)"
+        fi
+    fi
+    for proc in ${pids}; do
+        [[ "${proc}" =~ ^[0-9]+$ ]] || continue
+        content="$(cat "${PROC_ROOT}/${proc}/status" 2>/dev/null)" || continue
+        [[ -n "${content}" ]] || continue
+        if [[ "${from_cgroup}" -eq 1 ]]; then
+            proc_uid="$(awk '/^Uid:/ {print $2; exit}' <<< "${content}")"
+            [[ "${proc_uid}" == "${uid}" ]] || continue
+        fi
+        live_groups="$(awk '/^Groups:/ {$1=""; sub(/^ /, ""); print}' <<< "${content}")"
+        inspected=$((inspected + 1))
+        case " ${live_groups} " in
+            *" ${gid} "*) ;;
+            *) fail "Live ${svc} process is missing Tec-Tac runtime group ${group_name} (gid ${gid}), so it cannot read the secret store master key. Nothing was changed on the key." ;;
+        esac
+    done
+    if [[ "${inspected}" -lt 1 ]]; then
+        fail "Could not inspect live ${svc} process after restart."
+    fi
+    log "Verified live ${svc} process has Tec-Tac runtime group ${group_name} (gid ${gid})."
+}
+
 TACTICAL_GID="$(id -g "${TACTICAL_USER}")"
 for key_svc in ${KEY_GROUP_SERVICES}; do
     SVC_SUPPLEMENTARY="$(systemctl show "${key_svc}.service" -p SupplementaryGroups --value)"
@@ -1484,15 +1527,7 @@ for key_svc in ${KEY_GROUP_SERVICES}; do
         *" ${TACTICAL_GROUP} "*) ;;
         *) fail "${key_svc}.service did not load required supplementary group '${TACTICAL_GROUP}', so it cannot read the secret store master key. Nothing was changed on the key." ;;
     esac
-    SVC_PID="$(systemctl show "${key_svc}.service" -p MainPID --value)"
-    if [[ ! "${SVC_PID}" =~ ^[0-9]+$ || "${SVC_PID}" -le 1 || ! -r "/proc/${SVC_PID}/status" ]]; then
-        fail "Could not inspect live ${key_svc} process after restart."
-    fi
-    LIVE_GROUPS="$(awk '/^Groups:/ {$1=""; sub(/^ /, ""); print}' "/proc/${SVC_PID}/status")"
-    case " ${LIVE_GROUPS} " in
-        *" ${TACTICAL_GID} "*) log "Verified live ${key_svc} process has Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
-        *) fail "Live ${key_svc} process is missing Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID}), so it cannot read the secret store master key. Nothing was changed on the key." ;;
-    esac
+    service_group_check "${key_svc}" "${TACTICAL_GID}" "${TACTICAL_GROUP}"
 done
 
 runtime_ownership_rule verify || fail "The Tec-Tac runtime does not match the ownership rule after installation."

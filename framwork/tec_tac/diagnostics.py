@@ -375,7 +375,36 @@ def _secret_key_access_check() -> dict:
             with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as handle:
                 return handle.read()
 
-        return secret_key_service_access_check(pid_reader=_main_pid, status_reader=_proc_status)
+        def _show(unit: str, prop: str) -> str:
+            import subprocess
+
+            try:
+                proc = subprocess.run(["systemctl", "show", unit, "-p", prop, "--value"], capture_output=True, text=True, timeout=3, check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError("systemctl show took longer than 3 seconds") from exc
+            return (proc.stdout or "").strip()
+
+        def _active_state(unit: str) -> str:
+            return _show(unit, "ActiveState")
+
+        def _cgroup_pids(unit: str) -> list:
+            group = _show(unit, "ControlGroup")
+            if not group.startswith("/"):
+                raise OSError("The unit has no control group.")
+            with open(f"/sys/fs/cgroup{group}/cgroup.procs", encoding="utf-8", errors="replace") as handle:
+                return [int(item) for item in handle.read().split() if item.isdigit()]
+
+        def _service_uid(service: str):
+            import pwd
+
+            name = _show(f"{service}.service", "User") or "root"
+            try:
+                return pwd.getpwnam(name).pw_uid
+            except KeyError:
+                return None
+
+        return secret_key_service_access_check(pid_reader=_main_pid, status_reader=_proc_status, active_reader=_active_state,
+                                               process_reader=_cgroup_pids, uid_reader=_service_uid)
     except Exception as exc:
         return _could_not_run("core.secret_store.service-access", "Services can read the secret store key", exc)
 

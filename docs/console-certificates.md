@@ -248,18 +248,24 @@ The tunnel proof is stricter. It carries the PC's time, and Core accepts it only
 
 Every row is module `core` with `operation_context.server_provenance = console-certificates`, except the tunnel rows named below. Rows marked strict are written in the same database transaction as the change: if the row cannot be written, the change is not made (503 `audit_failed`).
 
-| Action | Strict | When |
-|---|---|---|
-| `custom:console-ca-created` | yes | the first issue creates the CA |
-| `custom:console-ca-replaced` | yes | the CA was replaced (counts of revoked certificates and cancelled enrolments) |
-| `custom:console-cert-issue-authorised` | yes | an administrator allowed an engineer |
-| `custom:console-cert-enrolment-cancelled` | yes | an administrator cancelled an enrolment |
-| `custom:console-cert-issued` | yes | a certificate was signed |
-| `custom:console-cert-revoked` | yes | a certificate was revoked (also for `replaced`) |
-| `custom:console-cert-enrol-code` | no | an engineer asked for a code (never the code) |
-| `custom:console-cert-enrol-refused` | no | an enrolment was refused (reason and address; at most one a minute per address) |
-| `custom:console-cert-refused` | no | a tunnel connect was refused for one of the seven certificate reasons (reason, address, session id, engineer id, and the serial only when it parsed to 32 hex; at most one a minute per address) |
-| `deny` | no | a permission refusal, or an API key on one of the three routes (reason `api_key_refused`) |
+| Action | Strict | Actor | When |
+|---|---|---|---|
+| `custom:console-ca-created` | yes | the administrator who caused it; `service:core.console-certificates` when no person is known | the first issue creates the CA |
+| `custom:console-ca-replaced` | yes | the administrator | the CA was replaced (counts of revoked certificates and cancelled enrolments) |
+| `custom:console-cert-issue-authorised` | yes | the administrator | an administrator allowed an engineer |
+| `custom:console-cert-enrolment-cancelled` | yes | the administrator | an administrator cancelled an enrolment |
+| `custom:console-cert-issued` | yes | the engineer who owns the matched enrolment (`service:core.console-certificates` only when the engineer has no usable username) | a certificate was signed (`via` = `enrolment_code`, and the address) |
+| `custom:console-cert-revoked` | yes | the person who revoked it (the engineer for their own certificate, the administrator otherwise); for `replaced`, the engineer who enrolled | a certificate was revoked (also for `replaced`, with `replaced_by_serial`, `via` and the address) |
+| `custom:console-cert-enrol-code` | no | the engineer | an engineer asked for a code (never the code) |
+| `custom:console-cert-enrol-refused` | no | the engineer, once the code was matched; `service:core.console-certificates` when no person is known (unknown or burnt code, bad header or body) | an enrolment was refused (reason and address, and after a match also `via`, `engineer_id` and `username`; at most one a minute per address and per kind) |
+| `custom:console-cert-refused` | no | `service:core.console-certificates` | a tunnel connect was refused for one of the seven certificate reasons (reason, address, session id, engineer id, and the serial only when it parsed to 32 hex; at most one a minute per address and per kind) |
+| `deny` | no | the person refused | a permission refusal, or an API key on one of the three routes (reason `api_key_refused`) |
+
+Since 1.18.55 the enrolment rows sit under the engineer, because the code comes only from their own signed-in My Account page and is bound to their enrolment. The administrator who allowed the enrolment is already named in the `custom:console-cert-issue-authorised` row. A refusal limiter has one key per address and per kind: a refused enrolment and a refused tunnel connect from one address in the same minute each write their one row.
+
+### Finding every row of one certificate
+
+Search the audit log by the certificate's serial (the object id), or by the action names `custom:console-cert-issued`, `custom:console-cert-revoked` and `custom:console-cert-refused`. The revoke row for a person's own certificate is under that person. The administrator's revoke is under the administrator. The issue row is under the engineer who enrolled.
 
 The tunnel's own rows (`custom:probe-tunnel-connect` and `custom:probe-tunnel-end`, provenance `probe-transport`) carry `cert_serial` from 1.18.53.
 

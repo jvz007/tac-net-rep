@@ -953,14 +953,43 @@ def end_all_sessions(detail: str = "ca_replaced") -> list[str]:
     return _end_sessions(lambda session_id: True, detail)
 
 
+def queue_end(kind: str, ref: str) -> bool:
+    """Queue the live end of tunnel sessions as one Celery task, with one bounded broker attempt (the way module_install_run.enqueue_tick does
+    it: 2 second socket and connect timeouts, no retry, an expiry). Never raises. False when the broker did not take it: the marker then ends
+    the sessions at the next 5-second tick of their sockets. There is no fallback that ends sessions inline."""
+    try:
+        from .tasks import end_console_certificate_sessions
+
+        options = {"socket_timeout": 2, "socket_connect_timeout": 2}
+        with end_console_certificate_sessions.app.connection_for_write(transport_options=options, connect_timeout=2) as broker:
+            end_console_certificate_sessions.apply_async(args=[kind, ref], connection=broker, retry=False, expires=120, ignore_result=True)
+        return True
+    except Exception:
+        logger.warning("The live tunnel end after a Console certificate change was not queued; the marker ends the sessions within 5 seconds.", exc_info=True)
+        return False
+
+
+def run_end(kind: str, ref: str) -> list[str]:
+    """The body of the background task: end the sessions of one revoked certificate, or every session after a CA replacement. Returns the ids
+    this run ended. An unknown kind ends nothing."""
+    if kind == "certificate_revoked":
+        return end_for_certificate(ref, "certificate_revoked")
+    if kind == "ca_replaced":
+        return end_all_sessions("ca_replaced")
+    logger.warning("An unknown tunnel end kind was ignored.")
+    return []
+
+
 def certificate_revoked(serial: str) -> list[str]:
-    """After a certificate was revoked and the change committed: write the backstop marker, then end its sessions at once. A fault in either
-    part never stops the other and never reaches the revoke."""
+    """After a certificate was revoked and the change committed: write the backstop marker (the only work left in the request), then queue the
+    live end as a background task. A fault in either part never stops the other and never reaches the revoke. Returns an empty list (the ending
+    now happens in the worker)."""
     try:
         _cache().set(cert_revoked_key(serial), 1, _keep_seconds())
     except Exception:
         logger.warning("The certificate revoke marker could not be written; the 5-minute re-check is the backstop.", exc_info=True)
-    return end_for_certificate(serial, "certificate_revoked")
+    queue_end("certificate_revoked", serial)
+    return []
 
 
 def ca_replaced(server_id: str) -> list[str]:
@@ -969,7 +998,8 @@ def ca_replaced(server_id: str) -> list[str]:
         _cache().set(ca_replaced_key(server_id), 1, _keep_seconds())
     except Exception:
         logger.warning("The CA replacement marker could not be written; the 5-minute re-check is the backstop.", exc_info=True)
-    return end_all_sessions("ca_replaced")
+    queue_end("ca_replaced", server_id)
+    return []
 
 
 def certificate_end_reason(serial: str, server_id) -> str | None:

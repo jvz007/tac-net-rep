@@ -269,6 +269,16 @@ def detect_module_updates(trigger: str = "manual-sync"):
     return detect_and_notify(trigger=trigger)
 
 
+@app.task(name="tec_tac.end_console_certificate_sessions", ignore_result=True, soft_time_limit=30, time_limit=45)
+def end_console_certificate_sessions(kind: str, ref: str):
+    """Core 1.18.55: end the live tunnel sessions after a Console certificate was revoked (``kind`` certificate_revoked, ``ref`` the serial) or the
+    CA was replaced (``ca_replaced``, the server id). It runs in a worker, not in the web request; the Celery limits bound any hung channel or cache
+    call. The cache marker written in the request ends a session within 5 seconds even if this task never runs."""
+    from .probe_tunnel import run_end
+
+    return run_end(kind, ref)
+
+
 @app.task(name="tec_tac.advance_module_install_run", ignore_result=True, acks_late=True, reject_on_worker_lost=True, time_limit=900)
 def advance_module_install_run(run_id: str, seq=None):
     """Core 1.18.20 (R1b to R1d): one short tick of a module install run, then the next tick three seconds later. ``seq`` is the tick token of Core 1.18.21 (a message queued by 1.18.20 has none and still runs). The module helper restarts

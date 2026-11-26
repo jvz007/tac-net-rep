@@ -8,7 +8,7 @@ headers only on success; the ticket is not burnt by a header-shape refusal and i
 seven reasons write only console-cert-refused (never probe-tunnel-refused) and count against the address; cert_serial on the connect row, the end row
 and the console marker; a master key that cannot sign closes 1013 and burns the ticket; the account checks run after the certificate and before the
 server proof; the probe side ignores the headers; issue_tunnel_ticket refuses a person with no valid certificate before any slot or rate budget;
-end_for_certificate and end_all_sessions end exactly the right sessions at once; the 5-second tick ends a session from the marker alone, at the
+end_for_certificate and end_all_sessions end exactly the right sessions at once (since 1.18.55 the hooks only queue the end: tests/probe-tunnel-end-queue-1.18.55.py); the 5-second tick ends a session from the marker alone, at the
 certificate's end, and survives a cache fault; the 5-minute re-check re-reads the certificate row.
 """
 from __future__ import annotations
@@ -365,7 +365,8 @@ async def end_cases():
     must(c.close_reasons == ["ended_by_core"], "the live Console of the rest is closed too")
     must(await off(tun.end_all_sessions) == [], "nothing is left")
 
-    # the revoke hook writes the marker, then ends; a failing marker write never stops the ending
+    # 1.18.55: the revoke hook writes the marker and queues the end (the ending runs in the worker: tests/probe-tunnel-end-queue-1.18.55.py);
+    # a failing marker write never stops the ending
     fresh()
     got = issued()
     CERTS["serial"] = SERIAL_X
@@ -373,6 +374,8 @@ async def end_cases():
     real_set = CACHE.set
     CACHE.set = lambda key, value, timeout=None: (_ for _ in ()).throw(ConnectionError("down")) if key.startswith(tun.CERT_REVOKED_PREFIX) else real_set(key, value, timeout)
     out = await off(tun.certificate_revoked, SERIAL_X)
+    must(out == [] and not live.closed, "the hook ends nothing in the calling thread")
+    out = await off(tun.run_end, "certificate_revoked", SERIAL_X)
     CACHE.set = real_set
     must(out == [got["session_id"]] and live.close_reasons == ["ended_by_core"], "ended although the marker could not be written")
     fresh()
@@ -398,7 +401,8 @@ async def end_cases():
         return real_end(*args, **kwargs)
 
     tun.end_session = slow_end
-    ended_ids = await off(tun.certificate_revoked, SERIAL_X)
+    await off(tun.certificate_revoked, SERIAL_X)  # the request writes the marker; the worker then runs the end
+    ended_ids = await off(tun.run_end, "certificate_revoked", SERIAL_X)
     tun.end_session = real_end
     must(len(ended_ids) == 2, f"two ended inside the {tun.END_BUDGET_SECONDS} second budget: {ended_ids}")
     left = [(console, sid) for console, sid in sessions if sid not in ended_ids]

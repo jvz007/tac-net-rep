@@ -167,6 +167,17 @@ def service_actor():
     return service_audit_actor(module_id="core", service="console-certificates")
 
 
+def engineer_actor(user):
+    """The audit actor of an enrolment row: the engineer who owns the matched enrolment, or the service actor when that is not a usable person.
+    A blank username would make the audit contract raise inside a strict row, so it falls back (never raises)."""
+    try:
+        if getattr(user, "is_authenticated", False) and str(getattr(user, "username", "") or "").strip():
+            return user
+    except Exception:
+        logger.warning("The Console enrolment engineer could not be read as an audit actor.", exc_info=True)
+    return service_actor()
+
+
 def deny(actor, object_type: str, object_id=None, reason: str = "permission_required") -> None:
     """The non-strict Core ``deny`` row for a refused permission (AD-12). Never raises."""
     _audit(actor, "deny", object_type, object_id, "Blocked a Console certificate action that needs a permission.", {"reason": reason},
@@ -249,10 +260,12 @@ def note_failure(ip: str) -> None:
         logger.warning("The Console enrolment failure counter could not be written.", exc_info=True)
 
 
-def _refusal_row_due(ip: str) -> bool:
-    """At most one refusal row per address per minute. A cache fault writes none (a flood of rows would cost more than one lost row)."""
+def _refusal_row_due(ip: str, kind: str = "enrol") -> bool:
+    """At most one refusal row per address and per kind (enrol, connect) per minute. A cache fault writes none (a flood of rows would cost more
+    than one lost row). The enrol key text is the one 1.18.54 used; the connect kind has its own key."""
+    prefix = REFUSAL_ROW_PREFIX if kind == "enrol" else f"{REFUSAL_ROW_PREFIX}{kind}:"
     try:
-        return bool(_cache().add(f"{REFUSAL_ROW_PREFIX}{_address_key(ip)}:{_minute()}", 1, timeout=120))
+        return bool(_cache().add(f"{prefix}{_address_key(ip)}:{_minute()}", 1, timeout=120))
     except Exception:
         logger.warning("The Console enrolment refusal row limiter could not be read.", exc_info=True)
         return False
@@ -518,7 +531,7 @@ def _revoke_row(cert, by, reason: str, now, actor, extra: dict | None = None) ->
 
 
 def issue_certificate(ca, *, user_id: int, username: str, spki_der: bytes, spki_sha256: str, pc_label: str, actor, now=None,
-                      validity_days: int | None = None, ip: str = ""):
+                      validity_days: int | None = None, ip: str = "", via: str = ""):
     """Sign and store one certificate. Run it inside the caller's transaction: it opens its own (nested) one, and every strict audit row
     belongs to the same unit, so no row means no certificate. Returns (row, cert DER).
 
@@ -574,14 +587,14 @@ def issue_certificate(ca, *, user_id: int, username: str, spki_der: bytes, spki_
     with transaction.atomic():
         replaced = list(models.TecTacConsoleCertificate.objects.filter(user_id=user_id, state="active", pc_label__iexact=pc_label))
         for older in replaced:
-            _revoke_row(older, user_id, "replaced", now, actor, {"replaced_by_serial": serial, "ip": ip})
+            _revoke_row(older, user_id, "replaced", now, actor, {"replaced_by_serial": serial, "ip": ip, "via": via})
         check_certificate_limit(user_id, pc_label, now)
         row = models.TecTacConsoleCertificate.objects.create(
             serial=serial, ca=ca, user_id=user_id, username_snapshot=(username or "")[:150], pc_label=pc_label, spki_sha256=spki_sha256,
             cert_der=cert_der, not_before=not_before, not_after=not_after, state="active")
         _audit(actor, "custom:console-cert-issued", "console_certificate", serial, "An Engineer Console certificate was issued.",
                {"serial": serial, "spki_sha256": spki_sha256, "pc_label": pc_label, "not_after": not_after.isoformat(), "engineer_id": user_id,
-                "username": username, "ip": ip, "replaced": len(replaced)})
+                "username": username, "ip": ip, "via": via, "replaced": len(replaced)})
     return row, cert_der
 
 
@@ -706,12 +719,19 @@ def parse_enrol_request(authorization, raw: bytes, content_length) -> tuple[str,
     return code, {"public_key": body["public_key"], "pc_label": label, "proof": body["proof"]}
 
 
-def _refuse(ip: str, code: str, message: str, status: int, enrolment=None, *, retry_after: int | None = None):
-    """Count a failure, write at most one non-strict row per address per minute (reason and address only) and return the error."""
+def _refuse(ip: str, code: str, message: str, status: int, enrolment=None, *, retry_after: int | None = None, engineer=None):
+    """Count a failure, write at most one non-strict row per address per minute (reason and address only) and return the error. When the code
+    was matched (``enrolment`` and ``engineer`` given) the row sits under the engineer; otherwise no person is known and it sits under the
+    service actor."""
     note_failure(ip)
     if _refusal_row_due(ip):
-        _audit(service_actor(), "custom:console-cert-enrol-refused", "console_certificate", str(enrolment.id) if enrolment is not None else None,
-               "An Engineer Console enrolment was refused.", {"reason": code, "ip": ip}, strict=False, refusal=True)
+        metadata = {"reason": code, "ip": ip}
+        actor = service_actor()
+        if enrolment is not None and engineer is not None:
+            actor = engineer_actor(engineer)
+            metadata.update({"via": "enrolment_code", "engineer_id": getattr(engineer, "pk", None), "username": str(getattr(engineer, "username", "") or "")[:150]})
+        _audit(actor, "custom:console-cert-enrol-refused", "console_certificate", str(enrolment.id) if enrolment is not None else None,
+               "An Engineer Console enrolment was refused.", metadata, strict=False, refusal=True)
     error = ConsoleCertError(code, message, status, retry_after=retry_after)
     error.counted = True
     return error
@@ -743,41 +763,41 @@ def enrol(*, code: str, host: str | None, fields: dict, ip: str) -> dict:
     enrolment = candidate  # from here the code is burnt; every refusal below carries its own reason
     user = _find_user(enrolment.user_id)
     if account_problem(user):
-        raise _refuse(ip, "account_inactive", "This account may not hold a Console certificate.", 403, enrolment)
+        raise _refuse(ip, "account_inactive", "This account may not hold a Console certificate.", 403, enrolment, engineer=user)
     try:
         check_certificate_limit(user.pk, fields["pc_label"], now)
     except ConsoleCertError as exc:
-        raise _refuse(ip, exc.code, exc.message, exc.status_code, enrolment) from None
+        raise _refuse(ip, exc.code, exc.message, exc.status_code, enrolment, engineer=user) from None
     loaded = load_public_key(fields["public_key"])
     if loaded is None:
-        raise _refuse(ip, "key_invalid", "The public key must be an uncompressed P-256 key (base64url of SPKI DER).", 400, enrolment)
+        raise _refuse(ip, "key_invalid", "The public key must be an uncompressed P-256 key (base64url of SPKI DER).", 400, enrolment, engineer=user)
     public_key, spki_der, spki_sha256 = loaded
     if host is None:
-        raise _refuse(ip, "host_unusable", "This address cannot be used for a Console certificate.", 400, enrolment)
+        raise _refuse(ip, "host_unusable", "This address cannot be used for a Console certificate.", 400, enrolment, engineer=user)
     if not verify_proof(public_key, host, code, spki_sha256, fields["proof"]):
-        raise _refuse(ip, "proof_invalid", "The proof of possession is not valid.", 400, enrolment)
+        raise _refuse(ip, "proof_invalid", "The proof of possession is not valid.", 400, enrolment, engineer=user)
     try:
         ca = active_ca()
         if ca is None:
-            raise _refuse(ip, "ca_unavailable", "The Console certificate authority is not ready.", 503, enrolment)
+            raise _refuse(ip, "ca_unavailable", "The Console certificate authority is not ready.", 503, enrolment, engineer=user)
         with transaction.atomic():
             row, cert_der = issue_certificate(
                 ca, user_id=user.pk, username=user.get_username(), spki_der=spki_der, spki_sha256=spki_sha256, pc_label=fields["pc_label"],
-                actor=service_actor(), now=now, ip=ip)
+                actor=engineer_actor(user), now=now, ip=ip, via="enrolment_code")
             used = models.TecTacConsoleEnrolment.objects.filter(pk=enrolment.pk, state="open").update(state="used", used_serial=row.serial)
             if used != 1:  # cancelled or replaced while this call ran: nothing is issued
                 raise ConsoleCertError("code_invalid", "The enrolment code is not valid.", 401)
     except ConsoleCertError as exc:
         if exc.counted:
             raise
-        raise _refuse(ip, exc.code, exc.message, exc.status_code, enrolment) from None
+        raise _refuse(ip, exc.code, exc.message, exc.status_code, enrolment, engineer=user) from None
     except SecretStoreError:
-        raise _refuse(ip, "master_key_unavailable", "The Console certificate authority cannot use its key.", 503, enrolment) from None
+        raise _refuse(ip, "master_key_unavailable", "The Console certificate authority cannot use its key.", 503, enrolment, engineer=user) from None
     except Exception as exc:
         from .audit import AuditWriteError
 
         if isinstance(exc, AuditWriteError):
-            raise _refuse(ip, "audit_failed", "The change could not be recorded, so it was not made.", 503, enrolment) from None
+            raise _refuse(ip, "audit_failed", "The change could not be recorded, so it was not made.", 503, enrolment, engineer=user) from None
         raise
     return {
         "v": 1, "host": host, "server_id": ca.server_id, "ca_public_key": b64u(bytes(ca.public_key_der)), "ca_cert": b64u(bytes(ca.cert_der)),
@@ -1086,7 +1106,7 @@ def record_refusal(reason: str, ip: str, *, session_id=None, engineer_id=None, s
     """The one non-strict ``custom:console-cert-refused`` row of a refused Console connect, at most one per address per minute. Holds a reason,
     the address, the session id, the engineer id and (only when it parsed to 32 hex) a serial. Never a ticket, a certificate, a proof or a
     header. Returns True when a row was written."""
-    if not _refusal_row_due(ip):
+    if not _refusal_row_due(ip, "connect"):
         return False
     metadata = {"reason": reason, "ip": ip}
     if isinstance(session_id, str) and session_id:

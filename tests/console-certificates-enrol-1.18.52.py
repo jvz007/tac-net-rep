@@ -80,7 +80,7 @@ must(leaf.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == user.u
 must(enrolment_of(user).state == "used" and enrolment_of(user).used_serial == bundle["serial"], "the enrolment is used")
 issued = rows_of(h, "custom:console-cert-issued")
 must(len(issued) == 1 and issued[0]["strict"] is True and issued[0]["module_id"] == "core", "one strict issued row")
-must(issued[0]["actor"].identity == "core.console-certificates" and issued[0]["metadata"]["engineer_id"] == user.pk, "the service actor, the engineer in the metadata")
+must(issued[0]["actor"].pk == user.pk and issued[0]["metadata"]["engineer_id"] == user.pk and issued[0]["metadata"]["via"] == "enrolment_code", "1.18.55: the engineer is the actor, the engineer in the metadata")
 must(issued[0]["operation_context"] == {"server_provenance": "console-certificates"}, "provenance marker")
 must(refused_row_count() == 0, "no refusal row on success")
 
@@ -137,7 +137,7 @@ must(enrolment_of(user).state == "open" and enrolment_of(user).code_hash == "", 
 retry = h.enrol(code, console)
 must(retry.status_code == 401, "the burnt code does not work again")
 must(refused_row_count() == 1, f"exactly one refusal row for the address in a minute: {refused_row_count()}")
-must(rows_of(h, "custom:console-cert-enrol-refused")[0]["metadata"] == {"reason": "proof_invalid", "ip": IP}, "the row holds reason and address only")
+must(rows_of(h, "custom:console-cert-enrol-refused")[0]["metadata"] == {"reason": "proof_invalid", "ip": IP, "via": "enrolment_code", "engineer_id": user.pk, "username": user.username}, "the row holds reason, address, via and the engineer")
 new_code = cc.create_enrolment_code(user, HOST)["code"]
 ok = h.enrol(new_code, console)
 must(ok.status_code == 201, f"a new code on the same open enrolment works: {ok.status_code} {ok.data}")
