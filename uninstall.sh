@@ -89,7 +89,7 @@ MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
 MODULE_HOTFIX_HELPER="/usr/local/sbin/tec-tac-module-hotfix"
 MODULE_HOTFIX_SUDOERS="/etc/sudoers.d/tec-tac-module-hotfix"
 MODULE_CONFIG="${TEC_TAC_CONFIG_FILE}"
-RMM_DROPIN="/etc/systemd/system/rmm.service.d/tec-tac.conf"
+KEY_GROUP_DROPINS="/etc/systemd/system/rmm.service.d/tec-tac.conf /etc/systemd/system/daphne.service.d/tec-tac.conf /etc/systemd/system/celery.service.d/tec-tac.conf /etc/systemd/system/celerybeat.service.d/tec-tac.conf"
 SYSTEM_UPDATE_HELPER="/usr/local/sbin/tec-tac-system-update"
 SYSTEM_UPDATE_LIB="/usr/local/lib/tec-tac-updater"
 SYSTEM_UPDATE_SUDOERS="/etc/sudoers.d/tec-tac-system-update"
@@ -100,7 +100,7 @@ SERVER_BACKUP_SUDOERS="/etc/sudoers.d/tec-tac-server-backup"
 SERVER_MAINTENANCE_HELPER="/usr/local/sbin/tec-tac-server-maintenance"
 SERVER_MAINTENANCE_LIB="/usr/local/lib/tec-tac-server-maintenance"
 SERVER_MAINTENANCE_SUDOERS="/etc/sudoers.d/tec-tac-server-maintenance"
-rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_HOTFIX_SUDOERS}" "${MODULE_HOTFIX_HELPER}" "${MODULE_CONFIG}" "${RMM_DROPIN}" "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" "${SERVER_MAINTENANCE_SUDOERS}" "${SERVER_MAINTENANCE_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
+rm -f "${MODULE_SUDOERS}" "${MODULE_HELPER}" "${MODULE_HOTFIX_SUDOERS}" "${MODULE_HOTFIX_HELPER}" "${MODULE_CONFIG}" ${KEY_GROUP_DROPINS} "${SYSTEM_UPDATE_SUDOERS}" "${SYSTEM_UPDATE_HELPER}" "${SYSTEM_UPDATE_CONFIG}" "${SERVER_BACKUP_SUDOERS}" "${SERVER_BACKUP_HELPER}" "${SERVER_MAINTENANCE_SUDOERS}" "${SERVER_MAINTENANCE_HELPER}" /usr/local/sbin/tec-tac-repair /usr/local/sbin/tec-tac-diagnostics
 rm -rf "${SYSTEM_UPDATE_LIB}" "${SERVER_BACKUP_LIB}" "${SERVER_MAINTENANCE_LIB}"
 # 1.17.116: core.sandbox (1.17.118: the lib folder also holds the launcher and the canary program, so the same removal covers them). The helper, its registry and copied programs (the lib folder), the sudo rule, the slice with its drop-in, the sweep
 # timer and service, and the tmpfs folder go. The helper's own audit log and status file under /var/lib/tec-tac/sandbox are kept, like the
@@ -121,7 +121,7 @@ rm -rf /run/tec-tac-sbx-egress /run/private/tec-tac-sbx-egress
 rm -f "${SANDBOX_SUDOERS}" "${SANDBOX_HELPER}" "${SANDBOX_SWEEP_TIMER}" "${SANDBOX_SWEEP_SERVICE}" "${SANDBOX_SLICE}"
 rm -rf "${SANDBOX_LIB}" "${SANDBOX_SLICE_DROPIN_DIR}" "${SANDBOX_RUN}"
 systemctl daemon-reload
-log "Removed Tec-Tac privileged lifecycle/update/backup/maintenance helpers, sudoers rules, and rmm.service drop-in."
+log "Removed Tec-Tac privileged lifecycle/update/backup/maintenance helpers, sudoers rules, and the supplementary-group drop-ins (rmm, daphne, celery, celerybeat)."
 
 # Runtime code and installed modules are intentionally not deleted.
 # Uninstall disconnects Tec-Tac from Tactical; source checkouts under /opt/tec-tac-src remain separate.

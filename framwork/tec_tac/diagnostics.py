@@ -358,6 +358,28 @@ def _ui_module_sync_check() -> dict:
         return _could_not_run("core.ui.module-sync", "UI module sync", exc)
 
 
+def _secret_key_access_check() -> dict:
+    try:
+        from .diagnostics_install import secret_key_service_access_check
+
+        def _main_pid(unit: str) -> str:
+            import subprocess
+
+            try:
+                proc = subprocess.run(["systemctl", "show", unit, "-p", "MainPID", "--value"], capture_output=True, text=True, timeout=3, check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError("systemctl show took longer than 3 seconds") from exc
+            return (proc.stdout or "").strip()
+
+        def _proc_status(pid: int) -> str:
+            with open(f"/proc/{pid}/status", encoding="utf-8", errors="replace") as handle:
+                return handle.read()
+
+        return secret_key_service_access_check(pid_reader=_main_pid, status_reader=_proc_status)
+    except Exception as exc:
+        return _could_not_run("core.secret_store.service-access", "Services can read the secret store key", exc)
+
+
 def _storage_check() -> dict:
     import shutil
 
@@ -392,7 +414,7 @@ def diagnostic_report(*, live_capabilities: bool = False) -> dict:
     sections = [
         _section("versions", "Framework & UI", _version_checks()),
         _section("django", "Django & database", [_django_check(), *_migration_checks()]),
-        _section("runtime", "Runtime services", [_service_check(), _scheduler_check(), _helper_check(), _source_ownership_check(), _ui_module_sync_check()]),
+        _section("runtime", "Runtime services", [_service_check(), _scheduler_check(), _helper_check(), _source_ownership_check(), _ui_module_sync_check(), _secret_key_access_check()]),
         _section("modules", "Modules & capabilities", [_module_check(), _capability_check(live=live_capabilities)]),
         _section("contracts", "Contracts & audit", [_contract_check(), _audit_check(), _publisher_trust_check()]),
         _section("storage", "Storage", [_storage_check()]),

@@ -14,6 +14,9 @@ from typing import Any
 
 SOURCE_OWNERSHIP_ID = "core.install.source-ownership"
 UI_SYNC_ID = "core.ui.module-sync"
+KEY_ACCESS_ID = "core.secret_store.service-access"
+KEY_ACCESS_SERVICES = ("rmm", "daphne", "celery", "celerybeat")
+DEFAULT_MASTER_KEY_PATH = "/etc/tec-tac/secrets/master.key"
 HELP_ID = "core.troubleshooting-diagnostics"
 DEFAULT_UI_SYNC_SCRIPT = "/usr/local/lib/tec-tac-ui-sync/scripts/sync-modules.sh"
 DEFAULT_UI_DEPLOY_ROOT = "/var/lib/tec-tac/ui/tec-tac"
@@ -219,3 +222,58 @@ def ui_module_sync_check(layout_reader: Callable[[], dict], lstat: Callable[[str
     if unknown:
         return _check(UI_SYNC_ID, label, "unknown", " ".join(p["fix"] for p in unknown), details=details, metadata=metadata)
     return _check(UI_SYNC_ID, label, "pass", "The UI sync program is published, root-owned, not older than the installed UI, and its path unit is enabled.", details=details, metadata=metadata)
+
+
+def _service_row(service: str, pid_reader: Callable[[str], Any], status_reader: Callable[[int], str], key_gid: int) -> dict:
+    """One service's answer: ok, missing_group, not_running or unknown. Only the Groups line of /proc/<pid>/status is read."""
+    try:
+        raw = pid_reader(f"{service}.service")
+        pid = int(str(raw).strip() or 0)
+    except (OSError, TimeoutError, ValueError) as exc:
+        return {"service": service, "state": "unknown", "reason": f"The service's process id could not be read ({exc.__class__.__name__})."}
+    if pid <= 1:
+        return {"service": service, "state": "not_running", "reason": "The service has no running process."}
+    try:
+        text = status_reader(pid)
+    except OSError as exc:
+        return {"service": service, "state": "unknown", "reason": f"The process's group list could not be read ({exc.__class__.__name__})."}
+    groups = None
+    for line in str(text).splitlines():
+        if line.startswith("Groups:"):
+            groups = line[len("Groups:"):].split()
+            break
+    if groups is None:
+        return {"service": service, "state": "unknown", "reason": "The process status has no Groups line."}
+    if str(key_gid) in groups:
+        return {"service": service, "state": "ok"}
+    return {"service": service, "state": "missing_group", "reason": f"The live process does not carry group id {key_gid}."}
+
+
+def secret_key_service_access_check(key_stat: Callable[[str], Any] = os.stat, pid_reader: Callable[[str], Any] | None = None,
+                                    status_reader: Callable[[int], str] | None = None, key_path: str = DEFAULT_MASTER_KEY_PATH,
+                                    services: tuple = KEY_ACCESS_SERVICES) -> dict:
+    """1.18.54: does each running Core service carry the group that owns the secret store master key? Read-only and Django-free. The
+    key file is only stat-ed (its group id); its content is never opened. The answer holds service names, group numbers and states."""
+    label = "Services can read the secret store key"
+    try:
+        key_gid = int(key_stat(key_path).st_gid)
+    except OSError as exc:
+        return _check(KEY_ACCESS_ID, label, "unknown", f"The master key file could not be inspected ({_reason(exc)}), so no service was compared with it.")
+    if pid_reader is None or status_reader is None:
+        return _check(KEY_ACCESS_ID, label, "unknown", "No process reader was available, so no service was compared with the key's group.")
+    rows = [_service_row(service, pid_reader, status_reader, key_gid) for service in services]
+    details = {"key_group_id": key_gid, "services": rows}
+    metadata = {"key_group_id": key_gid, "services": {r["service"]: r["state"] for r in rows}}
+    missing = [r["service"] for r in rows if r["state"] == "missing_group"]
+    unknown = [r["service"] for r in rows if r["state"] == "unknown"]
+    if missing:
+        names = ", ".join(f"{n}.service" for n in missing)
+        return _check(KEY_ACCESS_ID, label, "fail",
+                      f"{names} runs without the group that owns the secret store key (gid {key_gid}), so it cannot read the key. Run the installer again, "
+                      "or check the tec-tac.conf drop-in for that service, then restart it. The key file stays as it is.", details=details, metadata=metadata)
+    if unknown:
+        return _check(KEY_ACCESS_ID, label, "unknown", f"Could not tell for {', '.join(unknown)}. Nothing was assumed.", details=details, metadata=metadata)
+    running = [r for r in rows if r["state"] == "ok"]
+    if not running:
+        return _check(KEY_ACCESS_ID, label, "unknown", "No Core service was running, so nothing could be compared with the key's group.", details=details, metadata=metadata)
+    return _check(KEY_ACCESS_ID, label, "pass", f"{len(running)} running service(s) carry the key's group; services that are stopped were not checked.", details=details, metadata=metadata)

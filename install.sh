@@ -537,20 +537,29 @@ MODULE_SUDOERS="/etc/sudoers.d/tec-tac-module-manager"
 MODULE_V2_SUDOERS="/etc/sudoers.d/tec-tac-module-manager-v2"
 MODULE_HOTFIX_SUDOERS="/etc/sudoers.d/tec-tac-module-hotfix"
 MODULE_STATE_FILE="${MODULE_STATE_ROOT}/module-state.json"
-RMM_DROPIN_DIR="/etc/systemd/system/rmm.service.d"
-RMM_DROPIN="${RMM_DROPIN_DIR}/tec-tac.conf"
 TEC_TAC_UI_REPO="${TEC_TAC_UI_SOURCE}"
 TEC_TAC_UI_ROOT="${TEC_TAC_UI_DEPLOY_ROOT:-/var/lib/tec-tac/ui/tec-tac}"
 
-mkdir -p "${RMM_DROPIN_DIR}"
-cat > "${RMM_DROPIN}" <<EOF
+# 1.18.54: every service whose code can call the secret store gets the Tactical account's own group as a supplementary group, so it can
+# read the master key (root:tactical 0640). rmm and daphne serve module routes and the tunnel, celery runs module tasks, celerybeat imports
+# the same app. The unit's Group=www-data hides the group; nothing new is opened and the key file is not touched.
+KEY_GROUP_SERVICES="rmm daphne celery celerybeat"
+install_service_group_dropin() {
+    local base="$1" svc dir
+    for svc in ${KEY_GROUP_SERVICES}; do
+        dir="${base}/${svc}.service.d"
+        mkdir -p "${dir}"
+        cat > "${dir}/tec-tac.conf" <<EOF
 [Service]
 SupplementaryGroups=${TACTICAL_GROUP}
 EOF
-chown root:root "${RMM_DROPIN}"
-chmod 0644 "${RMM_DROPIN}"
-systemctl daemon-reload
-log "Installed rmm.service supplementary-group drop-in for Tec-Tac runtime access: ${TACTICAL_GROUP}"
+        chown root:root "${dir}/tec-tac.conf"
+        chmod 0644 "${dir}/tec-tac.conf"
+        log "Installed ${svc}.service supplementary-group drop-in for Tec-Tac runtime access: ${TACTICAL_GROUP}"
+    done
+    systemctl daemon-reload
+}
+install_service_group_dropin "/etc/systemd/system"
 
 # ZIP extraction does not reliably preserve executable bits. Repair the
 # Recovery Toolkit scripts before sourcing/calling them so offline framework
@@ -1468,21 +1477,23 @@ for svc in rmm daphne celery celerybeat; do
     log "${svc}: module state readable by ${SERVICE_USER}"
 done
 
-RMM_SUPPLEMENTARY="$(systemctl show rmm.service -p SupplementaryGroups --value)"
-case " ${RMM_SUPPLEMENTARY} " in
-    *" ${TACTICAL_GROUP} "*) ;;
-    *) fail "rmm.service did not load required supplementary group '${TACTICAL_GROUP}'." ;;
-esac
-RMM_PID="$(systemctl show rmm.service -p MainPID --value)"
 TACTICAL_GID="$(id -g "${TACTICAL_USER}")"
-if [[ ! "${RMM_PID}" =~ ^[0-9]+$ || "${RMM_PID}" -le 1 || ! -r "/proc/${RMM_PID}/status" ]]; then
-    fail "Could not inspect live rmm process after restart."
-fi
-LIVE_GROUPS="$(awk '/^Groups:/ {$1=""; sub(/^ /, ""); print}' "/proc/${RMM_PID}/status")"
-case " ${LIVE_GROUPS} " in
-    *" ${TACTICAL_GID} "*) log "Verified live rmm process has Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
-    *) fail "Live rmm process is missing Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
-esac
+for key_svc in ${KEY_GROUP_SERVICES}; do
+    SVC_SUPPLEMENTARY="$(systemctl show "${key_svc}.service" -p SupplementaryGroups --value)"
+    case " ${SVC_SUPPLEMENTARY} " in
+        *" ${TACTICAL_GROUP} "*) ;;
+        *) fail "${key_svc}.service did not load required supplementary group '${TACTICAL_GROUP}', so it cannot read the secret store master key. Nothing was changed on the key." ;;
+    esac
+    SVC_PID="$(systemctl show "${key_svc}.service" -p MainPID --value)"
+    if [[ ! "${SVC_PID}" =~ ^[0-9]+$ || "${SVC_PID}" -le 1 || ! -r "/proc/${SVC_PID}/status" ]]; then
+        fail "Could not inspect live ${key_svc} process after restart."
+    fi
+    LIVE_GROUPS="$(awk '/^Groups:/ {$1=""; sub(/^ /, ""); print}' "/proc/${SVC_PID}/status")"
+    case " ${LIVE_GROUPS} " in
+        *" ${TACTICAL_GID} "*) log "Verified live ${key_svc} process has Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID})." ;;
+        *) fail "Live ${key_svc} process is missing Tec-Tac runtime group ${TACTICAL_GROUP} (gid ${TACTICAL_GID}), so it cannot read the secret store master key. Nothing was changed on the key." ;;
+    esac
+done
 
 runtime_ownership_rule verify || fail "The Tec-Tac runtime does not match the ownership rule after installation."
 
