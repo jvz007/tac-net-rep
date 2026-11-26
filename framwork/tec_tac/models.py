@@ -988,3 +988,57 @@ class TecTacConsoleEnrolment(models.Model):
 
     def __str__(self):
         return f"{self.id}:{self.state}"
+
+
+class TecTacConsoleSession(models.Model):
+    """One Engineer Console sign-in (Core 1.18.56, C1). The row is the Console's credential record: the SHA-256 of its opaque token, the PC it is
+    bound to (the certificate serial) and the Tec-Tac session behind it (``trust_id``, a TecTacSessionTrust row, which holds the Knox digest).
+
+    ``id`` is also the identity string ``console:<id>`` that the session guard binds the trust row to. The token itself is never stored.
+    ``user_id`` and ``trust_id`` are plain values with no foreign key, like the certificate rows, so no swappable dependency is needed.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.IntegerField()
+    trust_id = models.UUIDField()
+    token_hash = models.CharField(max_length=64, unique=True)
+    serial = models.CharField(max_length=32)
+    pc_label = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked = models.BooleanField(default=False)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(max_length=24, blank=True, default="")
+
+    class Meta:
+        db_table = "core_console_session"
+        indexes = [
+            models.Index(fields=("user_id", "revoked"), name="tectac_consess_user_idx"),
+            models.Index(fields=("serial", "revoked"), name="tectac_consess_serial_idx"),
+            models.Index(fields=("trust_id",), name="tectac_consess_trust_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.id}:{'revoked' if self.revoked else 'live'}"
+
+
+class TecTacConsoleSignin(models.Model):
+    """A one-time sign-in code of an Engineer Console (Core 1.18.56, C1). Only the SHA-256 of the code is stored. The code is bound to the person,
+    the certificate serial, the PKCE challenge, the loopback port and Core's host, and lives 60 seconds. It is burnt by one conditional update."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code_hash = models.CharField(max_length=64, unique=True)
+    user_id = models.IntegerField()
+    serial = models.CharField(max_length=32)
+    code_challenge = models.CharField(max_length=43)
+    redirect_port = models.IntegerField()
+    host = models.CharField(max_length=253)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "core_console_signin"
+
+    def __str__(self):
+        return f"{self.id}:{'used' if self.used_at else 'open'}"

@@ -390,6 +390,8 @@ SERVER_PROVENANCE_PROBE_TRANSPORT = "probe-transport"
 SERVER_PROVENANCE_AGENT_DOWNLOADS = "agent-downloads"
 # 1.18.52: provenance of the rows Core writes for the Engineer Console certificates (tec_tac.console_certificates). Core-only.
 SERVER_PROVENANCE_CONSOLE_CERTIFICATES = "console-certificates"
+# 1.18.56: provenance of the rows Core writes for the Engineer Console sessions (tec_tac.console_sessions). Core-only.
+SERVER_PROVENANCE_CONSOLE_SESSIONS = "console-sessions"
 # Core-internal authority. Passed only by Core's own executor to _record_row, never through the public record().
 _TACTICAL_OPERATION_AUTHORITY = object()
 
@@ -941,6 +943,35 @@ def _record_console_certificates(
     code, a ticket, a key, a signature, a proof or a header value, and never the CA private key.
     """
     context = {"server_provenance": SERVER_PROVENANCE_CONSOLE_CERTIFICATES}
+    if refusal:
+        context["core_refusal"] = True
+    return _record_row(
+        actor=actor, module_id="core", action=action, object_type=object_type, object_id=object_id, message=message, metadata=metadata,
+        strict=strict, operation_context=context, authority=_TACTICAL_OPERATION_AUTHORITY,
+    )
+
+
+def _record_console_sessions(
+    *,
+    actor,
+    action: str,
+    object_type: str = "console_session",
+    object_id: Any = None,
+    message: Any = None,
+    metadata: dict | None = None,
+    strict: bool = False,
+    refusal: bool = False,
+) -> dict[str, Any]:
+    """Write a row for the Engineer Console sessions (1.18.56). Private: only Core's own console_sessions files call it.
+
+    The module is core. ``object_type`` is console_session. ``actor`` is the signed-in engineer for a sign-in or a sign-out they made, or the
+    console-sessions service actor where no person is known (a refused sign-in whose code did not match, a session that ended by itself).
+    ``strict`` raises AuditWriteError when the row cannot be written: the sign-in makes its change in the same transaction, so no row means no
+    session. The row carries operation_context.server_provenance = console-sessions; ``refusal`` adds core_refusal = true. Callers pass only the
+    fields listed in docs/console-sessions.md: a serial, a PC label, ids, a reason, a date, counts and the address. Never a code, a verifier, a
+    challenge, a token, a ticket, a certificate, a proof, a signature or a header value.
+    """
+    context = {"server_provenance": SERVER_PROVENANCE_CONSOLE_SESSIONS}
     if refusal:
         context["core_refusal"] = True
     return _record_row(

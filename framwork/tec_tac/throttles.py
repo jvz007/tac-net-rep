@@ -313,3 +313,33 @@ class ConsoleCertificateWriteMinThrottle(_WriteOnlyThrottle):
 class ConsoleCertificateWriteDayThrottle(_WriteOnlyThrottle):
     scope = "tec_tac_console_certificate_write_day"
     rate = "500/day"
+
+
+class _PersonAttemptThrottle(SimpleRateThrottle):
+    """Counted per signed-in person, whatever address they come from (the Console sign-in routes: one person is one budget)."""
+
+    def get_cache_key(self, request, view):
+        user = getattr(request, "user", None)
+        ident = str(getattr(user, "pk", "") or "")
+        if not ident:
+            return None  # not signed in: the authentication refuses before this matters
+        return self.cache_format % {"scope": self.scope, "ident": ident}
+
+
+class ConsoleSigninMinThrottle(_PersonAttemptThrottle):
+    """Core 1.18.56: asking for an Engineer Console sign-in code (POST /api/tfd/console-sessions/authorise/), 10 a minute per person."""
+
+    scope = "tec_tac_console_signin_min"
+    rate = "10/min"
+
+
+class ConsoleSigninDayThrottle(_PersonAttemptThrottle):
+    scope = "tec_tac_console_signin_day"
+    rate = "100/day"
+
+
+class ConsoleActivityMinThrottle(_PersonAttemptThrottle):
+    """Core 1.18.56: the Console's activity heartbeat (POST /api/tfd/console-sessions/activity/), 30 a minute per person."""
+
+    scope = "tec_tac_console_activity_min"
+    rate = "30/min"

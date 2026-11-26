@@ -208,6 +208,15 @@ class TecTacFrameworkConfig(AppConfig):
         except Exception:
             logger.exception("Tec-Tac core.result_checks capability could not be registered")
 
+        # 1.18.56: the capability a module uses to take a request from the Engineer Console (core.console_session). Its own try block: a fault is
+        # logged and never stops start-up.
+        try:
+            from .console_sessions import register_core_console_session_capability
+
+            register_core_console_session_capability()
+        except Exception:
+            logger.exception("Tec-Tac core.console_session capability could not be registered")
+
         # Core owns the compatibility boundary with Tactical Report Manager.
         # Install this before module AppConfig.ready() registrations execute so
         # modules never need to import ee.reporting internals themselves.

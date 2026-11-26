@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -23,6 +24,8 @@ from rest_framework.permissions import IsAuthenticated
 
 from .capabilities import register_capability
 from .models import TecTacSessionAudit, TecTacSessionSecurityConfig, TecTacSessionTrust
+
+logger = logging.getLogger("tec_tac.session_security")
 
 CAPABILITY_ID = "core.session_security"
 CAPABILITY_VERSION = "2.0.0"
@@ -222,6 +225,19 @@ def _update_global_policy(policy: dict, *, requested_by: str = "") -> dict[str, 
     return _policy_dict(config)
 
 
+def _console_authenticator(authenticator) -> bool:
+    """True when DRF accepted the request with the Engineer Console's authentication class (an isinstance check, not a name check)."""
+    if authenticator is None:
+        return False
+    try:
+        from .console_sessions import ConsoleSessionAuthentication
+
+        return isinstance(authenticator, ConsoleSessionAuthentication)
+    except Exception:
+        logger.debug("The Console authentication class could not be loaded.", exc_info=True)
+        return False
+
+
 def _credential_identity(request) -> str:
     """Bind Tec-Tac session trust to the authenticator DRF actually accepted."""
     authenticator = getattr(request, "successful_authenticator", None)
@@ -230,6 +246,17 @@ def _credential_identity(request) -> str:
     auth_module = authenticator.__class__.__module__ if authenticator is not None else ""
     authorization = str(request.META.get("HTTP_AUTHORIZATION") or "").strip()
     api_header = str(request.META.get("HTTP_X_API_KEY") or "").strip()
+
+    # Core 1.18.56: the Engineer Console's own authenticator. Its Authorization header is not a Knox token, so the Knox branch would refuse it.
+    # The identity is the Console session id; the Knox digest it carries (request_knox_digest) is the one Core minted for the sign-in.
+    if _console_authenticator(authenticator):
+        console_id = str(getattr(auth, "console_session_id", "") or "")
+        if not console_id or api_header or not authorization.startswith("TecTacConsole "):
+            raise SessionSecurityDenied("session_invalid_state", "Conflicting authentication headers were supplied.")
+        return f"console:{console_id}"
+    if str(request.META.get("HTTP_X_TECTAC_CONSOLE_PROOF") or "").strip():
+        # A Console proof header next to any other credential is never a browser: refuse it (the Console token works only on the Console routes).
+        raise SessionSecurityDenied("session_invalid_state", "Conflicting authentication headers were supplied.")
 
     # Tactical APIAuthentication returns the raw API key as request.auth. Resolve
     # it to the database key id so a credential fingerprint never depends on a
@@ -496,7 +523,21 @@ def _revoke_locked(
         if invalidate_knox:
             _invalidate_knox_for_session(session)
         _audit(event_type, session=session, reason=reason, requested_by=requested_by, policy=policy)
+        _console_session_revoked(session, reason)
     return session
+
+
+def _console_session_revoked(session, reason) -> None:
+    """Core 1.18.56: a Tec-Tac session that backs an Engineer Console session takes the Console session with it (one indexed lookup by trust id;
+    a browser session has no Console row). Every way a session ends passes here: the administrator's revoke, the sweep, idle, absolute, IP change.
+    It runs in a savepoint and a fault is only logged: a failed hook never blocks a revoke (the Console re-checks its session on every request)."""
+    try:
+        from . import console_sessions
+
+        with transaction.atomic():
+            console_sessions.on_trust_revoked(session, reason)
+    except Exception:
+        logger.warning("The Engineer Console session behind a revoked session could not be ended; its next request will be refused.", exc_info=True)
 
 
 
@@ -790,10 +831,12 @@ def _serialize_active_login_sessions(tokens, *, current_request=None) -> list[di
         if item.knox_digest
     }
     current_digest = request_knox_digest(current_request) if current_request is not None else ""
+    console_by_trust = _console_rows_by_trust([item.pk for item in trust_by_digest.values()])
     rows = []
     for token in tokens:
         digest = str(token.digest)
         trust = trust_by_digest.get(digest)
+        console_row = console_by_trust.get(trust.pk) if trust is not None else None
         rows.append({
             "id": _login_session_ref(digest),
             "user_id": token.user_id,
@@ -805,8 +848,23 @@ def _serialize_active_login_sessions(tokens, *, current_request=None) -> list[di
             "last_activity_at": trust.last_activity_at.isoformat() if trust and trust.last_activity_at else None,
             "last_seen_at": trust.last_seen_at.isoformat() if trust and trust.last_seen_at else None,
             "last_ip": trust.last_ip if trust else "",
+            "console": {"pc_label": console_row.pc_label, "short_serial": console_row.serial[:8]} if console_row is not None else None,
         })
     return rows
+
+
+def _console_rows_by_trust(trust_ids) -> dict:
+    """Core 1.18.56: the live Engineer Console sessions behind these Tec-Tac session ids ({trust id: row}), one query. An unreadable table reads as
+    none (the list still works)."""
+    if not trust_ids:
+        return {}
+    try:
+        from .models import TecTacConsoleSession
+
+        return {row.trust_id: row for row in TecTacConsoleSession.objects.filter(trust_id__in=list(trust_ids), revoked=False)}
+    except Exception:
+        logger.warning("The Engineer Console sessions could not be read for the session list.", exc_info=True)
+        return {}
 
 
 def list_active_login_sessions(*, current_request=None, requester=None) -> list[dict[str, Any]]:

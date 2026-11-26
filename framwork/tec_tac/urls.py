@@ -7,6 +7,9 @@ from .console_certificate_views import (
     ConsoleCertificateCaReplaceView, ConsoleCertificateCaView, ConsoleCertificateEnrolmentCancelView, ConsoleCertificateEnrolmentCodeView,
     ConsoleCertificateEnrolView, ConsoleCertificateIssueView, ConsoleCertificateListView, ConsoleCertificateMineView, ConsoleCertificateRevokeView,
 )
+from .console_session_views import (
+    ConsoleSessionActivityView, ConsoleSessionAuthoriseView, ConsoleSessionCurrentView, ConsoleSessionSignOutView, ConsoleSessionTokenView,
+)
 from .server_maintenance_views import (
     ServerMaintenanceActionListView, ServerMaintenanceJobListView,
     ServerMaintenanceJobDetailView, ServerMaintenanceJobCancelView, ServerMaintenanceJobLogView,
@@ -118,6 +121,11 @@ urlpatterns = [
     path("console-certificates/ca/", ConsoleCertificateCaView.as_view(), name="tec-tac-console-certificates-ca"),
     path("console-certificates/ca/replace/", ConsoleCertificateCaReplaceView.as_view(), name="tec-tac-console-certificates-ca-replace"),
     path("console-certificates/<str:serial>/revoke/", ConsoleCertificateRevokeView.as_view(), name="tec-tac-console-certificates-revoke"),
+    path("console-sessions/authorise/", ConsoleSessionAuthoriseView.as_view(), name="tec-tac-console-sessions-authorise"),
+    path("console-sessions/token/", ConsoleSessionTokenView.as_view(), name="tec-tac-console-sessions-token"),
+    path("console-sessions/current/", ConsoleSessionCurrentView.as_view(), name="tec-tac-console-sessions-current"),
+    path("console-sessions/activity/", ConsoleSessionActivityView.as_view(), name="tec-tac-console-sessions-activity"),
+    path("console-sessions/sign-out/", ConsoleSessionSignOutView.as_view(), name="tec-tac-console-sessions-sign-out"),
     path("agent-downloads/<str:token>/", AgentDownloadView.as_view(), name="tec-tac-agent-download"),
     path("endpoint-agent/installer.msi", InstallerDownloadView.as_view(), name="tec-tac-endpoint-agent-installer"),
     path("capabilities/", CapabilityListView.as_view(), name="tec-tac-capabilities"),

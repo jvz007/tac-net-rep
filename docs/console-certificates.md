@@ -276,3 +276,7 @@ A row may hold a serial, a key fingerprint (`spki_sha256`), a PC label, a date, 
 - The Console itself (the pinning, the proof on connect, the check of the server proof) ships separately as Engineer Console 0.1.0. Core 1.18.53 and that Console must reach a server together, because a Console that does not send the proof cannot connect.
 - The Core UI pages (My Account card, certificate list) ship separately. Until then use the routes above.
 - Accepting the server proof on Tactical 1.5.2 (Daphne) is checked on a 1.6.1 server first. A Console fails closed when the header does not arrive.
+
+## Signing in with the certificate (Core 1.18.56)
+
+Since 1.18.56 the certificate is also how an Engineer Console signs in to Tec-Tac: the browser hands the Console a one-time code, and the Console swaps it for a session by proving it holds this certificate's private key (`docs/console-sessions.md`). Every later request carries a signature made with the same key. A revoked or expired certificate, and a replaced CA, end the Console sessions on that PC (reasons `certificate_revoked`, `certificate_expired`, `ca_replaced`) in the same transaction as the revoke, and the tunnels opened from them end within seconds. The enrolment rows and routes on this page did not change.

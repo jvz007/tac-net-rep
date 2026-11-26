@@ -17,7 +17,8 @@ What is here:
   (``probe_tunnel.access_changed_at``); any other caller gets None.
 * ``notify_access_changed(user_ids, reason)``: used by the receivers below. It accepts only a call that comes from Django's own signal
   dispatcher (Core's model receivers).
-* ``mark_changed(user_ids)``: used by ``probe_tunnel.update_site`` only, when an owner moves a probe to another site.
+* ``mark_changed(user_ids)``: used by ``probe_tunnel.update_site`` (when an owner moves a probe to another site) and, since Core 1.18.56,
+  ``probe_tunnel.console_session_ended`` (when a person's Engineer Console session ends), and by nothing else.
 
 What is enforced, in plain words. Each writer and the reader judge their caller from the call stack, by the real path of the first frame
 outside this file. A frame of an installed, enabled module is refused (the verified-identity helper of tec_tac.caller_identity), and so is
@@ -64,7 +65,7 @@ _TEST_ALLOWED: set[str] = set()  # test seam only (see _allow_caller_for_tests);
 # the one first caller each function accepts: ("dispatcher" = Django's signal dispatcher, "tunnel" = probe_tunnel.py) and its function name
 _ALLOWED = {
     "notify_access_changed": ("dispatcher", None),
-    "mark_changed": ("tunnel", "update_site"),
+    "mark_changed": ("tunnel", ("update_site", "console_session_ended")),  # 1.18.56: a person's Console session ended (probe_tunnel.console_session_ended)
     "changed_at": ("tunnel", "access_changed_at"),
 }
 
@@ -130,7 +131,8 @@ def _caller_allowed(name: str) -> bool:
         path, function = _real(frame.f_code.co_filename), frame.f_code.co_name
         kind, wanted = _ALLOWED[name]
         known = _dispatcher_file() if kind == "dispatcher" else _TUNNEL_FILE
-        if path in _TEST_ALLOWED or (known is not None and path == known and (wanted is None or function == wanted)):
+        names = (wanted,) if isinstance(wanted, str) else wanted
+        if path in _TEST_ALLOWED or (known is not None and path == known and (names is None or function in names)):
             return True  # a Core file: never a module's code, so the module lookup (a disk scan) is not needed on the hot path
         _refuse(name, _refusal_reason)  # refused; the reason (a module lookup) is worked out only when a log line is due
         return False

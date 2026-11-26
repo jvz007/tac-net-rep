@@ -417,6 +417,17 @@ def _certs():
     return console_certificates
 
 
+def _console_serial_of(request) -> str | None:
+    """The certificate serial of the Engineer Console session that made this request, or None for a browser, an API key or anything else.
+    request.auth of a Console request carries console_serial (tec_tac.console_sessions.ConsoleAuth). Anything that is not 32 hex is ignored."""
+    try:
+        serial = getattr(getattr(request, "auth", None), "console_serial", None)
+    except Exception:
+        logger.debug("The Console serial could not be read from the request.", exc_info=True)
+        return None
+    return serial if isinstance(serial, str) and re.fullmatch(r"[0-9a-f]{32}", serial) else None
+
+
 def _launch_url(request, ticket: str) -> str | None:
     try:
         host = str(request.get_host()).strip().lower()
@@ -556,6 +567,9 @@ def issue_ticket(request, caller: str, spec) -> dict:
         "user_id": user.pk, "trust_id": str(getattr(session, "id", "")), "knox_digest": digest, "session_id": sid, "probe_id": probe_id,
         "module_id": caller, "permission": clean["permission"], "idle_s": clean["idle_s"], "cap_s": clean["cap_s"], "expires_at": now + TICKET_TTL_SECONDS,
     }
+    bound = _console_serial_of(request)
+    if bound:  # 1.18.56: asked for from an Engineer Console session: the connect must use that session's own certificate (cache only, never shown)
+        value["console_serial"] = bound
 
     def mutate(index, at):
         if sid in index or _cache().get(session_key(sid)) is not None:
@@ -669,6 +683,9 @@ def console_open(ticket: str, headers=None, host=None):
         if code in CERT_REASONS:
             return "certificate", {**value, "cert_serial": getattr(exc, "serial", None)}, None, code
         raise
+    bound = value.get("console_serial")  # 1.18.56: a ticket asked for from a Console session connects only with that session's certificate
+    if bound and bound != verified["serial"]:
+        return "certificate", {**value, "cert_serial": verified["serial"]}, None, "certificate_engineer_mismatch"
     refusal = account_refusal(value, value["permission"])
     if refusal:
         return "unauthorized", value, None, refusal
@@ -684,7 +701,7 @@ def console_open(ticket: str, headers=None, host=None):
         if getattr(exc, "code", None) == "master_key_unavailable":
             return "key_unavailable", value, None, "master_key_unavailable"
         raise
-    if not _attach(value["session_id"], "console", {"cert_serial": verified["serial"]}):
+    if not _attach(value["session_id"], "console", {"cert_serial": verified["serial"], "server_id": verified["server_id"]}):
         return "attached", value, record, "console_already_attached"
     certs.touch_last_used(verified["serial"])
     extend_slot(value["session_id"], record["cap_s"] + SLOT_GRACE_SECONDS)
@@ -925,6 +942,12 @@ def _console_serial(session_id: str):
 def _end_sessions(match, detail: str) -> list[str]:
     """End every live session (at most MAX_SESSIONS) for which ``match(session_id)`` is true, ended_by_core with ``detail``. Stops after
     END_BUDGET_SECONDS: what is left ends through the marker, in its socket's next 5-second tick. Returns the ids this call ended."""
+    try:
+        from celery.exceptions import SoftTimeLimitExceeded
+    except Exception:  # no Celery in this process: the placeholder is never raised
+        class SoftTimeLimitExceeded(BaseException):
+            pass
+
     ended = []
     started = time.time()
     for session_id in list(read_index()):
@@ -935,6 +958,8 @@ def _end_sessions(match, detail: str) -> list[str]:
             if get_end(session_id) or not match(session_id):
                 continue
             result = end_session(session_id, "ended_by_core", "core", detail)
+        except SoftTimeLimitExceeded:  # 1.18.56: the 30 second soft limit of the task stops the run cleanly; it is not a per-session fault
+            raise
         except Exception:
             logger.warning("A tunnel session could not be ended for a Console certificate change.", exc_info=True)
             continue
@@ -949,8 +974,41 @@ def end_for_certificate(serial: str, detail: str = "certificate_revoked") -> lis
 
 
 def end_all_sessions(detail: str = "ca_replaced") -> list[str]:
-    """End every live session. Returns the ids this call ended."""
+    """End every live session. Returns the ids this call ended. Since 1.18.56 a CA replacement uses end_for_ca instead (it ends only the sessions
+    of the replaced CA); this stays for callers that really mean every session."""
     return _end_sessions(lambda session_id: True, detail)
+
+
+def _console_marker(session_id: str):
+    marker = _cache().get(side_key(session_id, "console"))
+    return marker if isinstance(marker, dict) else None
+
+
+def _session_on_ca(session_id: str, server_id: str) -> bool:
+    """True when the live Console of this session connected under the CA ``server_id`` (the attach marker's server_id, written since 1.18.56).
+    A marker from an older release has none: the certificate row of its serial says which CA issued it, and a row that cannot be read (or no
+    serial) counts as on the CA, so the session ends (fail closed). A session with no Console attached has no CA-bound credential yet and is
+    left alone: its connect is checked against the active CA."""
+    marker = _console_marker(session_id)
+    if marker is None:
+        return False
+    recorded = marker.get("server_id")
+    if isinstance(recorded, str) and recorded:
+        return recorded == server_id
+    serial = marker.get("cert_serial")
+    if not isinstance(serial, str) or not serial:
+        return True
+    try:
+        issuer = _certs().ca_server_id_for_serial(serial)
+    except Exception:
+        logger.warning("The Console certificate behind a tunnel session could not be read; ending the session.", exc_info=True)
+        return True
+    return issuer is None or issuer == server_id
+
+
+def end_for_ca(server_id: str, detail: str = "ca_replaced") -> list[str]:
+    """End every live session whose Console connected under the CA ``server_id`` (the replaced CA) and no other. Returns the ids this call ended."""
+    return _end_sessions(lambda session_id: _session_on_ca(session_id, server_id), detail)
 
 
 def queue_end(kind: str, ref: str) -> bool:
@@ -975,7 +1033,7 @@ def run_end(kind: str, ref: str) -> list[str]:
     if kind == "certificate_revoked":
         return end_for_certificate(ref, "certificate_revoked")
     if kind == "ca_replaced":
-        return end_all_sessions("ca_replaced")
+        return end_for_ca(ref, "ca_replaced")  # 1.18.56: only the sessions of the replaced CA; a session of the new CA is never touched
     logger.warning("An unknown tunnel end kind was ignored.")
     return []
 
@@ -1000,6 +1058,21 @@ def ca_replaced(server_id: str) -> list[str]:
         logger.warning("The CA replacement marker could not be written; the 5-minute re-check is the backstop.", exc_info=True)
     queue_end("ca_replaced", server_id)
     return []
+
+
+def console_session_ended(user_id) -> None:
+    """After an Engineer Console session ended and the change committed (Core 1.18.56): mark the person's access marker so each of their live
+    Console tunnel sockets re-checks within one 5-second tick. The re-check ends the ones opened from the ended session (their Knox digest is
+    gone: session_revoked or credential_unavailable) and leaves a browser-opened tunnel of the same person alone. access_events.mark_changed
+    accepts this function and update_site only. Cache only; a fault is logged and never raised."""
+    if not isinstance(user_id, int) or isinstance(user_id, bool):
+        return
+    try:
+        from . import access_events
+
+        access_events.mark_changed([user_id])
+    except Exception:
+        logger.warning("The access marker after a Console session ended could not be written; the 5-minute re-check is the backstop.", exc_info=True)
 
 
 def certificate_end_reason(serial: str, server_id) -> str | None:

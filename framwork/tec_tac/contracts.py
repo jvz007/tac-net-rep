@@ -1408,7 +1408,7 @@ CORE_CONTRACTS = (
         "import_path": "tec_tac.probe_transport",
         "name": "issue_tunnel_ticket",
         "kind": "python",
-        "purpose": "issue_tunnel_ticket(request, module_id, spec) -> {outcome: ok, ticket, launch_url, expires_in: 60, session_id} or {outcome: denied|invalid|rate_limited|limit_reached|probe_offline|session_exists|unavailable, code, message}. Mints one single-use Console ticket for one tunnel session. request is the engineer's signed-in Tec-Tac request. spec is {session_id (uuid4), probe_id, permission (a networkprobe. permission), target_label, idle_s (60 to 900, default 900), cap_s (60 to 14400, default 14400), site_id (optional, a positive int, the probe's site; since core.probe_transport 1.2.0, Core 1.18.50: Core refuses a person who cannot see it with outcome denied and code out_of_scope, refuses their Console connect and ends their session ended_by_core with detail scope_lost when they lose it; without site_id Core checks no scope)}. Core re-checks the account and the permission, refuses an offline probe, allows 10 tickets a minute per engineer and 50 sessions in all, 5 per probe and 3 per engineer, and writes one deny row for every refusal. The owner checks the port rules before it calls (and the person's scope until it sends site_id). Only networkprobe, verified by Core, may call it; module_id must be the verified caller. (added 1.18.47, core.probe_transport 1.1.0, framework >=1.18.47; site_id added 1.18.50, core.probe_transport 1.2.0, framework >=1.18.50; the denied code console_certificate_required added 1.18.53, core.probe_transport 1.3.0, framework >=1.18.53: a person with no valid Engineer Console certificate is refused after the permission and scope checks and before the probe's presence, so no slot or rate budget is spent). Additive: the five 1.0.0 operations did not change.",
+        "purpose": "issue_tunnel_ticket(request, module_id, spec) -> {outcome: ok, ticket, launch_url, expires_in: 60, session_id} or {outcome: denied|invalid|rate_limited|limit_reached|probe_offline|session_exists|unavailable, code, message}. Mints one single-use Console ticket for one tunnel session. request is the engineer's signed-in Tec-Tac request. spec is {session_id (uuid4), probe_id, permission (a networkprobe. permission), target_label, idle_s (60 to 900, default 900), cap_s (60 to 14400, default 14400), site_id (optional, a positive int, the probe's site; since core.probe_transport 1.2.0, Core 1.18.50: Core refuses a person who cannot see it with outcome denied and code out_of_scope, refuses their Console connect and ends their session ended_by_core with detail scope_lost when they lose it; without site_id Core checks no scope)}. Core re-checks the account and the permission, refuses an offline probe, allows 10 tickets a minute per engineer and 50 sessions in all, 5 per probe and 3 per engineer, and writes one deny row for every refusal. The owner checks the port rules before it calls (and the person's scope until it sends site_id). Only networkprobe, verified by Core, may call it; module_id must be the verified caller. (added 1.18.47, core.probe_transport 1.1.0, framework >=1.18.47; site_id added 1.18.50, core.probe_transport 1.2.0, framework >=1.18.50; the denied code console_certificate_required added 1.18.53, core.probe_transport 1.3.0, framework >=1.18.53: a person with no valid Engineer Console certificate is refused after the permission and scope checks and before the probe's presence, so no slot or rate budget is spent). Additive: the five 1.0.0 operations did not change. Since Core 1.18.56 a ticket asked for from an Engineer Console session (a request that ConsoleSessionAuthentication accepted) is tied to that session's certificate: the connect must use that serial, else certificate_engineer_mismatch (already in the list of connect reasons). A browser-asked ticket is unchanged. No answer of this call changed.",
         "audience": "backend/premium-owner",
     },
     {
@@ -1656,6 +1656,46 @@ CORE_CONTRACTS = (
         ),
         "audience": "consumer/backend",
     },
+    {
+        "area": "console-sessions",
+        "import_path": "tec_tac.console_sessions",
+        "name": "ConsoleSessionAuthentication",
+        "kind": "python",
+        "purpose": (
+            "ConsoleSessionAuthentication (1.18.56; capability core.console_session 1.0.0; framework >=1.18.56). A DRF authentication class for a module route that the Engineer Console calls. "
+            "It reads Authorization: TecTacConsole <43 characters> and X-Tectac-Console-Proof (v1.<time>.<nonce>.<signature>), looks the token up by its hash, re-reads the PC's certificate (revoked, expired or retired CA: the session ends and the request is refused), "
+            "checks the signature of this exact request (method, path with query, body hash, token hash, time within 120 seconds) with the certificate's key and keeps the nonce for 5 minutes per certificate (a repeat is refused; a cache fault is refused with 503). "
+            "Any other Authorization scheme returns None so the other classes decide. request.auth is a ConsoleAuth with digest, serial, short_serial and pc_label; request.user is the engineer. It never holds a token or a key. "
+            "List it alone: authentication_classes = [ConsoleSessionAuthentication]. Feature-detect with has_capability('core.console_session'). See docs/console-sessions.md."
+        ),
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "console-sessions",
+        "import_path": "tec_tac.console_sessions",
+        "name": "ConsoleSessionAuthenticated",
+        "kind": "python",
+        "purpose": (
+            "ConsoleSessionAuthenticated (1.18.56; capability core.console_session 1.0.0; framework >=1.18.56). The DRF permission to use with ConsoleSessionAuthentication, the way SessionAuthenticated goes with the browser. "
+            "It requires that ConsoleSessionAuthentication accepted the request, the account is active, not blocked from the dashboard and not an installer user, and the Knox token behind the session still exists and has not expired. "
+            "Then the Tec-Tac session policy applies exactly as for the browser (idle limit, absolute lifetime, IP-change policy): request.tec_tac_session is set and a refusal has the same codes. A refused account ends the Console session. "
+            "permission_classes = [ConsoleSessionAuthenticated]. A module checks its own permission afterwards, as for any request. See docs/console-sessions.md."
+        ),
+        "audience": "consumer/backend",
+    },
+    {
+        "area": "console-sessions",
+        "import_path": "tec_tac.console_sessions",
+        "name": "console_info",
+        "kind": "python",
+        "purpose": (
+            "console_info(request) -> {serial, short_serial, pc_label} or None (1.18.56; capability core.console_session 1.0.0, operation console_info; framework >=1.18.56). "
+            "For a request that ConsoleSessionAuthentication accepted it names the PC: serial (32 hex), short_serial (its first 8 characters, as the certificate rows show) and the PC label. "
+            "For a browser, an API key or an anonymous request it returns None. It never raises and never returns a token, a digest or a key. "
+            "A module may use it to record which PC an action came from (for example the Console label of a tunnel session). It decides no right."
+        ),
+        "audience": "consumer/backend",
+    },
 )
 
 HTTP_CONTRACT_DETAILS = {
@@ -1741,6 +1781,53 @@ HTTP_CONTRACT_DETAILS = {
             "errors": {"400": "confirmation_required", "403": "interactive_session_required (1.18.53: an API key or a plain Django session; one deny row) or not an effective superuser (one deny row)", "409": "ca_not_created", "503": "master_key_unavailable, audit_failed"},
             "audit": "custom:console-ca-replaced (strict, with the counts).",
             "notes": ["Added in 1.18.52. Since 1.18.53 every live tunnel session ends within seconds (ended_by_core, detail ca_replaced) and an old-CA certificate answers certificate_invalid on a connect. An interactive signed-in session is required (an API key gets 403 interactive_session_required)."],
+        },
+    },
+    "/api/tfd/console-sessions/authorise/": {
+        "POST": {
+            "authorization": "authenticated, interactive Tec-Tac session (a Knox token; a Tactical API key or a plain Django session is refused). Any signed-in person, for their own certificate only",
+            "request": "JSON with exactly {serial: 32 lower-case hex of one of the person's active, unexpired certificates of the active CA, code_challenge: 43 base64url characters (S256 of the verifier), redirect_port: a whole number from 1024 to 65535}. Unknown keys are refused.",
+            "response": "{code, expires_in: 60, host, server_id}. Cache-Control: no-store. The code works once. Core keeps only its SHA-256. The browser hands the code to the Console over a loopback address on redirect_port.",
+            "errors": {"400": "invalid_request, unknown_field, host_unusable", "403": "interactive_session_required (an API key or a plain Django session; one deny row), serial_not_allowed (one body whether or not the serial exists)", "429": "throttled (10 a minute and 100 a day per person)", "503": "master_key_unavailable"},
+            "audit": "deny (not strict) for a refused API key. No row for a granted code; the sign-in itself is custom:console-signin.",
+            "notes": ["Added in 1.18.56 (framework >=1.18.56). Core-internal: a module has no use for this route. Expired and used sign-in rows older than an hour are deleted on each call (at most 200)."],
+        },
+    },
+    "/api/tfd/console-sessions/token/": {
+        "POST": {
+            "authorization": "none (no sign-in, no cookie, so no CSRF). The credential is the one-time code, its PKCE verifier, the certificate in X-Tectac-Console-Cert (base64url DER) and the proof in X-Tectac-Console-Proof (v1.<time>.<nonce>.<signature>, ECDSA P-256 over the exact bytes in docs/console-sessions.md). https only: a request the proxy says was plain text is refused 403 tls_required",
+            "request": "JSON of at most 4 KiB with exactly {v: 1, code, code_verifier: 43 base64url characters, serial} and optionally client_version (for example 0.1.1). Unknown keys are refused.",
+            "response": "201 {v: 1, token, idle_minutes, absolute_expires_at, heartbeat_seconds, console_min_version, engineer: {id, username}, serial, pc_label, server_id, server_proof}. Cache-Control: no-store. server_proof is v1. and base64url of the CA key's signature over the message in docs/console-sessions.md, which covers the Console's own nonce and the SHA-256 of the token.",
+            "errors": {"400": "invalid_request, host_unusable", "401": "code_invalid (one body for an unknown, used, expired or badly shaped code), host_mismatch, verifier_invalid, certificate_required, certificate_invalid, certificate_expired, certificate_revoked, certificate_engineer_mismatch, proof_invalid, proof_stale", "403": "tls_required, account_inactive", "413": "body_too_large", "426": "console_update_required (client_version is below console_min_version; the code is not touched)", "429": "rate_limited (10 failures a minute per address, its own counter)", "503": "master_key_unavailable, audit_failed"},
+            "audit": "custom:console-signin (strict, under the engineer, in the same transaction as the Knox token, the Tec-Tac session and the Console session: no row, no session); custom:console-signin-refused (not strict, at most one per address per minute; under the engineer once the code matched, otherwise under the console-sessions service actor; reason, address and a serial that parsed to 32 hex only).",
+            "notes": ["Added in 1.18.56. The code is burnt the moment it is taken, whatever follows. A second sign-in on the same PC ends the first (reason replaced). The Knox token Core mints is never returned, logged or stored: only its digest is kept."],
+        },
+    },
+    "/api/tfd/console-sessions/current/": {
+        "GET": {
+            "authorization": "the Engineer Console only: Authorization: TecTacConsole <token> and X-Tectac-Console-Proof for this request (ConsoleSessionAuthentication). Nothing else is accepted",
+            "response": "{engineer: {id, username}, serial, short_serial, pc_label, created_at, last_activity_at, idle_expires_at, absolute_expires_at, console_min_version, heartbeat_seconds}. Cache-Control: no-store. Never a token, digest or key.",
+            "errors": {"401": "token_invalid, session_revoked, certificate_revoked, certificate_expired, account_inactive, proof_invalid, proof_stale, proof_replayed, or the session guard's codes (session_idle_timeout, session_absolute_timeout, session_ip_change, session_revoked)", "413": "body_too_large", "503": "proof_unavailable (the nonce store is down)"},
+            "notes": ["Added in 1.18.56. Every Console request carries a proof of its own bytes; a replayed request is refused."],
+        },
+    },
+    "/api/tfd/console-sessions/activity/": {
+        "POST": {
+            "authorization": "the Engineer Console only (ConsoleSessionAuthentication), 30 a minute per person",
+            "request": "no body",
+            "response": "{last_activity_at, idle_expires_at, absolute_expires_at}. Extends the idle limit like the browser's activity heartbeat.",
+            "errors": {"401": "as current/", "429": "throttled"},
+            "notes": ["Added in 1.18.56. The Console sends it every heartbeat_seconds while the engineer works."],
+        },
+    },
+    "/api/tfd/console-sessions/sign-out/": {
+        "POST": {
+            "authorization": "the Engineer Console only (ConsoleSessionAuthentication)",
+            "request": "no body",
+            "response": "{revoked: true}. The Tec-Tac session is revoked, its Knox token is deleted, the Console session ends and the live tunnels opened from it end within about 10 seconds.",
+            "errors": {"401": "as current/"},
+            "audit": "custom:console-signout (not strict, reason engineer).",
+            "notes": ["Added in 1.18.56. Every other way a Console session can end writes the same row with its own reason: idle, absolute, certificate_revoked, certificate_expired, ca_replaced, account_inactive, admin, ip_change, replaced."],
         },
     },
     "/api/tfd/audit/record/": {
@@ -3557,6 +3644,7 @@ RULES = (
     "Swagger grouping is Core-owned: installed extension endpoints are grouped from their registered Django app ownership even when the URL prefix differs from the module ID. Module manifests may declare a readable name and category=core, server, premium or test (premium and test since 1.17.13); groups are named Core module · <name>, Server module · <name> or Module · <name>. Core HTTP surfaces use explicit subsystem groups, module callback ownership wins over path prefixes, and there is no generic Framework catch-all.",
     "Filter sets and value pickers belong to Core's filter-sets service (core.filter_sets 1.1.0, tec_tac.filter_sets, /api/tfd/filter-sets/ and /api/tfd/filter-values/, framework >=1.17.50; date and number fields need >=1.17.52). A module that offers filters registers '<module id>.filter_fields' 1.0.0 (describe_fields and distinct_values), lists it in its manifest capabilities when it is a core or server module, and filters distinct values at the source inside context.scope. It keeps no filter vocabulary of its own for new filters, evaluates a set only with build_q or matches on its own declared fields, and never takes field names, lookups, SQL or regular expressions from the browser. Core publishes no Python function that calls a provider for another module. The saved view key prefix 'fs-' is reserved for filter sets.",
     "Engineer Console certificates (Core 1.18.52, C3) are Core-internal: Core signs an engineer's Console key with its own certificate authority, and the routes under /api/tfd/console-certificates/ are for the browser shell and the Engineer Console only. A module has no use for them, there is no Python contract and no capability, and a module never reads, stores or asks for a Console certificate, a code or a key. Since Core 1.18.53 (core.probe_transport 1.3.0) a tunnel connect needs a certificate: only the owner of the tunnel (networkprobe) is affected, and only by one new denied code from issue_tunnel_ticket.",
+    "Engineer Console sessions (core.console_session 1.0.0, Core 1.18.56, C1): the Engineer Console signs in through the browser (a one-time code over a loopback address, PKCE and the PC's certificate) and Core gives it a session that is a normal Tec-Tac session (idle limit, absolute limit, IP-change policy, administrator revoke and the sweep all apply). A module route that the Console calls lists authentication_classes = [tec_tac.console_sessions.ConsoleSessionAuthentication] and permission_classes = [tec_tac.console_sessions.ConsoleSessionAuthenticated] (after has_capability('core.console_session'), requires.framework >=1.18.56), then checks its own permission as always; console_info(request) names the PC. Every Console request carries a signature of its own bytes, so a copied token is useless; the Console token is refused on every other route. A module never sees a token, a code, a certificate or a key, never mints or stores a Console credential and never writes a Console session row. A tunnel ticket asked for from a Console session connects only with that session's own certificate (core.probe_transport is unchanged at 1.3.0). See docs/console-sessions.md.",
     "Do not import another module's private models, helpers, services, filesystem layout or database tables.",
     "Feature modules must consume Tactical clients/sites/agents through tec_tac.resources; direct Tactical resource-model imports are a Core-only compatibility boundary.",
     "Resolve cross-module business operations through the capability registry and re-check runtime availability at execution time.",

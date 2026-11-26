@@ -71,6 +71,10 @@ CONNECT_PREFIX = b"tectac-console-connect-v1\n"
 SERVER_PROOF_PREFIX = b"tectac-core-connect-v1\n"
 PROOF_WINDOW_SECONDS = 120
 LAST_USED_SECONDS = 3600
+SIGNIN_PREFIX = b"tectac-console-signin-v1\n"  # 1.18.56 (C1): the Console's sign-in proof (docs/console-sessions.md)
+SERVER_SIGNIN_PREFIX = b"tectac-core-signin-v1\n"  # Core's proof of the sign-in, signed with the CA key
+REQUEST_PREFIX = b"tectac-console-request-v1\n"  # the Console's proof of every later request
+SIGNIN_FAILURE_PREFIX = "tec-tac:cc:sifail:"  # the sign-in route's own failure counter; it never shares the enrolment counter
 CERT_REASONS = ("certificate_required", "certificate_invalid", "certificate_expired", "certificate_revoked", "certificate_engineer_mismatch",
                 "proof_invalid", "proof_stale")
 
@@ -142,6 +146,21 @@ def _tunnel():
     from . import probe_tunnel
 
     return probe_tunnel
+
+
+def _end_console_sessions(*, serial, reason: str) -> None:
+    """1.18.56: end the Console sessions of one certificate (``serial``) or all of them (``serial`` None), inside the caller's transaction. A fault
+    is logged and never blocks the revoke: every Console request re-reads its certificate row, so a session that was not ended here is refused
+    and ended at its next request."""
+    try:
+        from django.db import transaction
+
+        from . import console_sessions
+
+        with transaction.atomic():  # a savepoint: a fault here must not poison the revoke's own transaction
+            console_sessions.end_sessions(serial=serial, reason=reason)
+    except Exception:
+        logger.warning("Ending the Console sessions after a certificate change failed (%s); each Console request re-reads its certificate.", reason, exc_info=True)
 
 
 def _after_commit(label: str, call) -> None:
@@ -237,20 +256,20 @@ def _minute() -> int:
     return int(time.time() // 60)
 
 
-def rate_limited(ip: str) -> bool:
+def rate_limited(ip: str, prefix: str = FAILURE_PREFIX) -> bool:
     """True when this address (an IPv6 address by its /64) has had 10 failed enrolments this minute. A cache fault reads as not limited and
     is logged: the code has 256 bits, so a missing counter does not make guessing possible (the rule endpoint_transport accepts too)."""
     try:
-        return int(_cache().get(f"{FAILURE_PREFIX}{_address_key(ip)}:{_minute()}", 0) or 0) >= FAILURES_PER_ADDRESS_PER_MINUTE
+        return int(_cache().get(f"{prefix}{_address_key(ip)}:{_minute()}", 0) or 0) >= FAILURES_PER_ADDRESS_PER_MINUTE
     except Exception:
         logger.warning("The Console enrolment failure counter could not be read.", exc_info=True)
         return False
 
 
-def note_failure(ip: str) -> None:
+def note_failure(ip: str, prefix: str = FAILURE_PREFIX) -> None:
     try:
         cache = _cache()
-        key = f"{FAILURE_PREFIX}{_address_key(ip)}:{_minute()}"
+        key = f"{prefix}{_address_key(ip)}:{_minute()}"
         cache.add(key, 0, timeout=120)
         try:
             cache.incr(key)
@@ -399,6 +418,7 @@ def replace_ca(user):
                {"old_server_id": old.server_id, "new_server_id": new.server_id, "revoked_certificates": revoked, "cancelled_enrolments": cancelled,
                 "not_after": new.not_after.isoformat()})
         old_server_id = old.server_id
+        _end_console_sessions(serial=None, reason="ca_replaced")  # 1.18.56: every live Console session ends in the same transaction
         _after_commit("ca_replaced", lambda: _tunnel().ca_replaced(old_server_id))
     return {"server_id": new.server_id, "old_server_id": old.server_id, "not_after": new.not_after, "revoked_certificates": revoked,
             "cancelled_enrolments": cancelled}
@@ -526,6 +546,7 @@ def _revoke_row(cert, by, reason: str, now, actor, extra: dict | None = None) ->
         metadata.update(extra)
     _audit(actor, "custom:console-cert-revoked", "console_certificate", cert.serial, "An Engineer Console certificate was revoked.", metadata)
     serial = cert.serial
+    _end_console_sessions(serial=serial, reason="certificate_revoked")  # 1.18.56: the Console sessions on this PC end in the same transaction
     _after_commit("certificate_revoked", lambda: _tunnel().certificate_revoked(serial))
     return True
 
@@ -1010,17 +1031,14 @@ def _verify_p1363(public_key, raw: bytes, message: bytes) -> bool:
     return True
 
 
-def verify_connect(cert_der, proof: dict, ticket: str, host, user_id: int, now=None) -> dict:
-    """Every certificate check of one Console connect, in the documented order. ``proof`` is {time, nonce, sig} as the headers carried them
-    (shape already checked). Raises ConnectRefused(reason) for a refusal; a database fault is raised as it is (the caller answers 1013).
-    Returns {serial, not_after (epoch seconds), server_id, ca}: ``ca`` is the active CA row, for ``sign_server_proof``."""
+def _certificate_row(cert_der, now) -> dict:
+    """The certificate checks every Console credential shares (tunnel connect since 1.18.53, sign-in since 1.18.56), in the documented order: the
+    parse, the active CA, the issuer and the CA signature, the key, the row (same bytes, same key hash, same CA), revoked, expired, not yet valid.
+    Raises ConnectRefused(reason). Returns {serial, row, public_key, ca}."""
     from cryptography import x509
     from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
     from cryptography.hazmat.primitives.asymmetric import ec
 
-    now = now or _now()
-    if abs(now.timestamp() - int(proof["time"])) > PROOF_WINDOW_SECONDS:
-        raise ConnectRefused("proof_stale")
     der = bytes(cert_der)
     try:
         cert = x509.load_der_x509_certificate(der)
@@ -1051,14 +1069,67 @@ def verify_connect(cert_der, proof: dict, ticket: str, host, user_id: int, now=N
         raise ConnectRefused("certificate_expired", known)
     if row.not_before > now:
         raise ConnectRefused("certificate_invalid", known)
+    return {"serial": serial, "row": row, "public_key": public_key, "ca": ca}
+
+
+def verify_connect(cert_der, proof: dict, ticket: str, host, user_id: int, now=None) -> dict:
+    """Every certificate check of one Console connect, in the documented order. ``proof`` is {time, nonce, sig} as the headers carried them
+    (shape already checked). Raises ConnectRefused(reason) for a refusal; a database fault is raised as it is (the caller answers 1013).
+    Returns {serial, not_after (epoch seconds), server_id, ca}: ``ca`` is the active CA row, for ``sign_server_proof``."""
+    now = now or _now()
+    if abs(now.timestamp() - int(proof["time"])) > PROOF_WINDOW_SECONDS:
+        raise ConnectRefused("proof_stale")
+    found = _certificate_row(cert_der, now)
+    serial, row, public_key, ca = found["serial"], found["row"], found["public_key"], found["ca"]
     if row.user_id != user_id:
-        raise ConnectRefused("certificate_engineer_mismatch", known)
+        raise ConnectRefused("certificate_engineer_mismatch", serial)
     signature = b64u_decode(proof["sig"], max_chars=100)
     if not isinstance(host, str) or not HOST_PATTERN.fullmatch(host) or signature is None:
-        raise ConnectRefused("proof_invalid", known)
+        raise ConnectRefused("proof_invalid", serial)
     if not _verify_p1363(public_key, signature, connect_message(host, ca.server_id, ticket, serial, proof["time"], proof["nonce"])):
-        raise ConnectRefused("proof_invalid", known)
+        raise ConnectRefused("proof_invalid", serial)
     return {"serial": serial, "not_after": row.not_after.timestamp(), "server_id": ca.server_id, "ca": ca}
+
+
+def ca_server_id_for_serial(serial: str) -> str | None:
+    """The server id of the CA that issued one certificate row, or None when there is no such row. A database fault is raised."""
+    row = _models().TecTacConsoleCertificate.objects.filter(serial=serial).select_related("ca").first()
+    return row.ca.server_id if row is not None else None
+
+
+# ------------------------------------------------------------------------------------------------ the Console sign-in messages (1.18.56, C1)
+def sha256_hex(data) -> str:
+    return hashlib.sha256(bytes(data) if isinstance(data, (bytes, bytearray)) else str(data).encode("ascii")).hexdigest()
+
+
+def signin_message(host: str, server_id: str, code: str, verifier: str, serial: str, time_text: str, nonce: str) -> bytes:
+    """The exact bytes the Console signs on a sign-in: lines joined by one LF, no trailing LF. ``code`` is the sign-in code and ``verifier`` the PKCE
+    verifier (only their hashes are signed)."""
+    return SIGNIN_PREFIX + (f"host={host}\nserver={server_id}\ncode={sha256_hex(code)}\nverifier={sha256_hex(verifier)}\nserial={serial}\n"
+                            f"time={time_text}\nnonce={nonce}").encode("ascii")
+
+
+def server_signin_message(host: str, server_id: str, code: str, serial: str, token: str, nonce: str) -> bytes:
+    """The exact bytes Core signs with the CA key and sends back as ``server_proof`` of a sign-in (the Console's own nonce)."""
+    return SERVER_SIGNIN_PREFIX + f"host={host}\nserver={server_id}\ncode={sha256_hex(code)}\nserial={serial}\ntoken={sha256_hex(token)}\nnonce={nonce}".encode("ascii")
+
+
+def request_message(host: str, server_id: str, serial: str, method: str, path: str, body: bytes, token: str, time_text: str, nonce: str) -> bytes:
+    """The exact bytes the Console signs on every request after the sign-in. ``path`` is the request target with its query string, ``body`` the raw
+    body bytes (empty for none)."""
+    head = f"host={host}\nserver={server_id}\nserial={serial}\nmethod={method}\npath={path}\nbody={sha256_hex(bytes(body))}\ntoken={sha256_hex(token)}\ntime={time_text}\nnonce={nonce}"
+    return REQUEST_PREFIX + head.encode("utf-8")
+
+
+def sign_server_signin_proof(ca, host: str, code: str, serial: str, token: str, nonce: str) -> str:
+    """The ``server_proof`` of a sign-in: ``v1.`` and base64url of the CA key's 64-byte r||s signature over server_signin_message. The key is decrypted
+    inside ``_with_ca_key`` only. An unreadable master key raises the secret store's master_key_unavailable."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    message = server_signin_message(host, ca.server_id, code, serial, token, nonce)
+    raw = _with_ca_key(ca, lambda key: _p1363(key.sign(message, ec.ECDSA(hashes.SHA256()))))
+    return "v1." + b64u(raw)
 
 
 def sign_server_proof(verified: dict, host: str, ticket: str, nonce: str) -> str:
