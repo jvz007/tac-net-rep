@@ -491,6 +491,9 @@ def _failed(code: str, message: str = "The Engineer Console credential is not va
     return AuthenticationFailed({"detail": message, "code": code}, code=code)
 
 
+RESULT_ATTRIBUTE = "_tectac_console_auth_result"  # on the Django request object only: see ConsoleSessionAuthentication.authenticate
+
+
 class ConsoleSessionAuthentication(BaseAuthentication):
     """``Authorization: TecTacConsole <token>`` plus ``X-Tectac-Console-Proof`` on every request. Any other Authorization scheme returns None so
     the other classes decide. Every step fails closed (AuthenticationFailed, WWW-Authenticate: TecTacConsole); the cheap lookups run before any
@@ -500,6 +503,30 @@ class ConsoleSessionAuthentication(BaseAuthentication):
         return AUTH_SCHEME
 
     def authenticate(self, request):
+        """The proof is checked once per HTTP request (1.18.59). Tactical's AuditMiddleware builds a first DRF Request on the same Django request
+        before the view builds its own, so DRF authenticates one request twice. The outcome of the first pass is kept on the Django request object
+        (memory only, never the cache or the database) and a second pass over the same request with the same headers, method and path returns it
+        again: the same user, or the same refusal. A re-sent request is a new object, has no stored outcome and is refused proof_replayed."""
+        django_request = getattr(request, "_request", request)
+        header = django_request.META.get("HTTP_AUTHORIZATION")
+        if not isinstance(header, str) or not header.startswith(AUTH_SCHEME):
+            return None
+        fingerprint = (header, django_request.META.get("HTTP_X_TECTAC_CONSOLE_PROOF"), django_request.method, django_request.get_full_path())
+        stored = getattr(django_request, RESULT_ATTRIBUTE, None)
+        if isinstance(stored, tuple) and len(stored) == 3 and stored[0] == fingerprint:
+            if stored[1] == "refused":
+                raise stored[2]
+            return stored[2]
+        try:
+            result = self._authenticate_once(request)
+        except APIException as exc:
+            setattr(django_request, RESULT_ATTRIBUTE, (fingerprint, "refused", exc))
+            raise
+        if result is not None:
+            setattr(django_request, RESULT_ATTRIBUTE, (fingerprint, "ok", result))
+        return result
+
+    def _authenticate_once(self, request):
         django_request = getattr(request, "_request", request)
         header = django_request.META.get("HTTP_AUTHORIZATION")
         if not isinstance(header, str) or not header.startswith(AUTH_SCHEME):

@@ -1667,7 +1667,7 @@ CORE_CONTRACTS = (
             "checks the signature of this exact request (method, path with query, body hash, token hash, time within 120 seconds) with the certificate's key and keeps the nonce for 5 minutes per certificate (a repeat is refused; a cache fault is refused with 503). "
             "Any other Authorization scheme returns None so the other classes decide. request.auth is a ConsoleAuth with digest, serial, short_serial and pc_label; request.user is the engineer. It never holds a token or a key. "
             "List it alone: authentication_classes = [ConsoleSessionAuthentication]. Feature-detect with has_capability('core.console_session'). See docs/console-sessions.md. "
-            "Since 1.18.57 the class itself refuses an inactive, blocked or installer account (401 account_inactive, the Console session ends), so a route that pairs it with SessionAuthenticated or IsAuthenticated cannot accept a deactivated account's still-valid session; ConsoleSessionAuthenticated keeps its own check."
+            "Since 1.18.57 the class itself refuses an inactive, blocked or installer account (401 account_inactive, the Console session ends), so a route that pairs it with SessionAuthenticated or IsAuthenticated cannot accept a deactivated account's still-valid session; ConsoleSessionAuthenticated keeps its own check. Since 1.18.59 the proof is checked once per HTTP request: a second pass over the same request object (Tactical's own middleware authenticates a request before the view does) returns the same answer, the same user or the same refusal, while a re-sent request is refused proof_replayed. Nothing about the route, the proof bytes or core.console_session 1.0.0 changed."
         ),
         "audience": "consumer/backend",
     },

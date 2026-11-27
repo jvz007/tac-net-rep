@@ -104,6 +104,7 @@ python3 "${ROOT}/tests/console-sessions-example-client-1.18.57.py"
 python3 "${ROOT}/tests/probe-tunnel-permissions-1.18.58.py"
 python3 "${ROOT}/tests/console-ui-url-setting-1.18.58.py"
 python3 "${ROOT}/tests/console-ui-url-1.18.58.py"
-python3 "${ROOT}/tests/version-1.18.58.py"
+python3 "${ROOT}/tests/console-sessions-once-per-request-1.18.59.py"
+python3 "${ROOT}/tests/version-1.18.59.py"
 
 echo "[TEST] PASS release integrity ${VERSION}"

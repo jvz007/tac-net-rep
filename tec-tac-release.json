@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "component": "framework",
-  "version": "1.18.58",
+  "version": "1.18.59",
   "publisher_id": "tech_flow_dynamics-dev",
   "key_id": "tech-key-dev-1025",
   "algorithm": "Ed25519",
@@ -37,14 +37,14 @@
       "sha256": "3f24fddff54cfb23b4972461716c0ede37a3bd69397e1b4f7c1c6ab283ad03b3"
     },
     {
-      "path": "RELEASE_NOTES_1.18.58.md",
-      "size": 15606,
-      "sha256": "ad6cef85e83387d6f06a6885361a0f661803540f134058e014eb14ce0845abc7"
+      "path": "RELEASE_NOTES_1.18.59.md",
+      "size": 6709,
+      "sha256": "beb070e08b07a69ede25a5717906b8e3244ca41bf4961236fb7c62d7d2d51f38"
     },
     {
       "path": "VERSION",
       "size": 7,
-      "sha256": "a48538607e6649294740c2674637f08b0c9e02f6d60b3be5d3a8edd47e1ef9f5"
+      "sha256": "0b2184e3b88c84a0a17bcc5bae679a2ee7a6fe35fa19663cfbaa9569dde8d801"
     },
     {
       "path": "bootstrap-modules/.gitkeep",
@@ -103,8 +103,8 @@
     },
     {
       "path": "docs/console-sessions.md",
-      "size": 17984,
-      "sha256": "080915c87f82abea7d8c8223c8a77f5a1ac5caa724ca4fce345677a85fd070a1"
+      "size": 18272,
+      "sha256": "cfccc0f064ef33654f4aa5b2d5d800e99503ac8a56c52673c0c51ce4dad3f780"
     },
     {
       "path": "docs/core-functions.md",
@@ -2017,6 +2017,11 @@
       "sha256": "dccade9d19e5262dfc5f56021c6508eb6bf62e1f6952f36173756ac84eb684fb"
     },
     {
+      "path": "docs/releases/RELEASE_NOTES_1.18.58.md",
+      "size": 15606,
+      "sha256": "ad6cef85e83387d6f06a6885361a0f661803540f134058e014eb14ce0845abc7"
+    },
+    {
       "path": "docs/releases/RELEASE_NOTES_1.18.6.md",
       "size": 7025,
       "sha256": "daa5fb5c32518a08e6b4ad763b21024780b5cee6765f6433a57e2280c88d71cc"
@@ -2498,8 +2503,8 @@
     },
     {
       "path": "framwork/tec_tac/console_sessions.py",
-      "size": 37811,
-      "sha256": "90735b3f6d9e7b9d433f9935abee4c7ec5908a69bfd7fc0388ccc5994fc805dc"
+      "size": 39535,
+      "sha256": "8eb3924e20232f164edbe8846b4e5a6f8e17509b46cd110466e4905e5599be92"
     },
     {
       "path": "framwork/tec_tac/contract_export_check.py",
@@ -2513,8 +2518,8 @@
     },
     {
       "path": "framwork/tec_tac/contracts.py",
-      "size": 587374,
-      "sha256": "9087bbd92a1829f71614bbe5fd625fc553c3b393ca8dc0cfe166944796556eef"
+      "size": 587739,
+      "sha256": "a2c1b5a89cd8334ec31e3eb152935fb996a0e1695a1a7be3e0bc68763eea08d8"
     },
     {
       "path": "framwork/tec_tac/dashboard_views.py",
@@ -3579,7 +3584,7 @@
     {
       "path": "tec_tac_package.json",
       "size": 77,
-      "sha256": "539b8107c0e8ec70afa62e034bb10213284913ae7b8b946c1fa3c019c1b490ce"
+      "sha256": "8e52abcf4c1672aa519d896956059bffda1e572d83fe1a0536196a1a8fc7f046"
     },
     {
       "path": "templates/plugin/extension/tec_tac.json",
@@ -4010,6 +4015,11 @@
       "path": "tests/console-sessions-migration-1.18.56.py",
       "size": 7690,
       "sha256": "183d72d39c3c41573d8df71ca4a34a5b11fd722c589bc953e461b3ddecb118be"
+    },
+    {
+      "path": "tests/console-sessions-once-per-request-1.18.59.py",
+      "size": 10479,
+      "sha256": "cd178245e95a057dbab518ac7a44ffe68471d25449445ae02642ef50713d42f7"
     },
     {
       "path": "tests/console-sessions-request-proof-1.18.56.py",
@@ -5282,6 +5292,11 @@
       "sha256": "b0f9b09e5ecf7f7779301d5df3495a47cc85a78063878a7f408e77c85b6c84cd"
     },
     {
+      "path": "tests/legacy/version-1.18.58.py",
+      "size": 7863,
+      "sha256": "3f7ce3d1f1cead504885e9c36482a38d9fe5b5d1f431bf93c312c075f4fe8f94"
+    },
+    {
       "path": "tests/legacy/version-1.18.6.py",
       "size": 2338,
       "sha256": "30c3599ca0600bb673259f96f11e2697f91328791855dba31afa0ebe1d5964ac"
@@ -6118,8 +6133,8 @@
     },
     {
       "path": "tests/release-integrity.sh",
-      "size": 5463,
-      "sha256": "d730c0b75c64228197be4fe28832ba1f965a742254542f1b3017e0ffa27af9dc"
+      "size": 5532,
+      "sha256": "dc123946a26512e41e68e75de3b03c1c8930a1de937d956abea569d80648359e"
     },
     {
       "path": "tests/replacement-registration-statement-1.17.68.py",
@@ -8517,9 +8532,9 @@
       "sha256": "9fc70da5923a2808e009896ff1fce0abb1ae507e847cf28b05faea1575d30714"
     },
     {
-      "path": "tests/version-1.18.58.py",
-      "size": 7863,
-      "sha256": "3f7ce3d1f1cead504885e9c36482a38d9fe5b5d1f431bf93c312c075f4fe8f94"
+      "path": "tests/version-1.18.59.py",
+      "size": 5711,
+      "sha256": "1421d1106579d3451b655d902d8d943ac906a362cb555cd44cf8c439200a99c8"
     },
     {
       "path": "tests/version-rebuild-ordering.py",
